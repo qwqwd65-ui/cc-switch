@@ -58,7 +58,7 @@ describe("Codex preset pre-filled reasoning levels", () => {
     // 优先，接受快照过时风险——官方目录变更时须同步）
     ["DeepSeek", "deepseek-v4-flash", ["low", "high", "max"]],
     ["DeepSeek", "deepseek-v4-pro", ["low", "high", "max"]],
-    // MiniMax/MiMo 官方 catalog=none/high（与模板默认一致，声明只为表单可见）
+    // MiniMax/MiMo 官方 catalog=none/high（思考开关，声明只为表单可见）
     ["MiniMax", "MiniMax-M3", ["none", "high"]],
     ["MiniMax en", "MiniMax-M3", ["none", "high"]],
     ["Xiaomi MiMo", "mimo-v2.5-pro", ["none", "high"]],

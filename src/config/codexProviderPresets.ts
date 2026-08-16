@@ -94,7 +94,7 @@ function modelCatalog(
         baseInstructions?: string;
         // Reasoning efforts the vendor's endpoint actually accepts (subset of
         // none/minimal/low/medium/high/xhigh/max/ultra). Omit to keep the
-        // template's conservative none/high default. Pre-filled from official
+        // NativeResponses template's full ladder. Pre-filled from official
         // vendor docs; users can still edit per provider in the form.
         reasoningLevels?: string[];
         defaultReasoningLevel?: string;

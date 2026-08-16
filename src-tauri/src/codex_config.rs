@@ -1145,6 +1145,32 @@ fn codex_supported_reasoning_levels(levels: &[String]) -> Value {
     json!(entries)
 }
 
+/// Fork default for third-party NativeResponses / Anthropic mappings that
+/// never declared `reasoningLevels`. Official #6228 only overrode the
+/// template when a row opted in; omitted rows kept the conservative
+/// none/high ladder and Codex's picker collapsed. Custom gateways (muyuan
+/// etc.) need the full Codex effort set, defaulting to `xhigh`.
+const CODEX_FORK_DEFAULT_REASONING_LEVEL: &str = "xhigh";
+
+fn fork_default_reasoning_level_names() -> Vec<String> {
+    CODEX_REASONING_LEVEL_DESCRIPTIONS
+        .iter()
+        .map(|(effort, _)| (*effort).to_string())
+        .collect()
+}
+
+fn apply_fork_default_reasoning_levels(entry_obj: &mut serde_json::Map<String, Value>) {
+    let levels = fork_default_reasoning_level_names();
+    entry_obj.insert(
+        "supported_reasoning_levels".to_string(),
+        codex_supported_reasoning_levels(&levels),
+    );
+    entry_obj.insert(
+        "default_reasoning_level".to_string(),
+        json!(CODEX_FORK_DEFAULT_REASONING_LEVEL),
+    );
+}
+
 /// Apply a per-model reasoning-level override onto a catalog entry. Returns
 /// true when the override was applied (so callers can skip further work).
 /// `template_default` is the base entry's `default_reasoning_level` (from the
@@ -1252,13 +1278,22 @@ fn codex_catalog_model_entry(
         }
     }
 
-    // Per-model reasoning levels override the template's conservative
-    // none/high default (e.g. a LiteLLM gateway serving a model that accepts
-    // low/medium/high/xhigh/max). Applies to every profile.
+    // Per-model reasoning levels override the template. Applies to every
+    // profile. NativeResponses / Anthropic used to keep a conservative
+    // none/high ladder when the row omitted `reasoningLevels`; that made
+    // every custom mapping look like a two-state thinking switch. Those
+    // profiles now fall back to the full Codex ladder (default xhigh).
+    // ProxyChat still inherits the gpt-5.5 / models_cache template.
+    // Official vendor catalogs are a different path and keep their own
+    // levels unless the row opts in.
     let template_default = template
         .get("default_reasoning_level")
         .and_then(|value| value.as_str());
-    apply_codex_reasoning_level_override(entry_obj, template_default, spec);
+    if !apply_codex_reasoning_level_override(entry_obj, template_default, spec)
+        && profile != CodexCatalogToolProfile::ProxyChat
+    {
+        apply_fork_default_reasoning_levels(entry_obj);
+    }
 
     entry
 }
@@ -1288,9 +1323,10 @@ struct CodexCatalogModelSpec {
     base_instructions: Option<String>,
     /// Per-row override for the generated catalog's `supported_reasoning_levels`
     /// (e.g. ["none", "low", "medium", "high", "xhigh", "max"]). When omitted
-    /// the template's conservative default (none/high) is kept. Consulted for
-    /// every profile; the vendor-catalog path applies it on top of the
-    /// official entry.
+    /// NativeResponses / Anthropic use the full Codex ladder (default xhigh);
+    /// ProxyChat and official vendor catalogs keep their own template. The
+    /// vendor-catalog path applies an explicit override on top of the official
+    /// entry.
     reasoning_levels: Option<Vec<String>>,
     /// Per-row override for the generated catalog's `default_reasoning_level`.
     /// Only meaningful together with `reasoning_levels`; when absent the
@@ -2188,6 +2224,30 @@ pub(crate) fn resolve_cc_switch_catalog_path(
     Some(resolved)
 }
 
+/// Extract `supported_reasoning_levels` from a generated catalog entry into
+/// the simplified `reasoningLevels: ["none", ...]` shape the form stores.
+/// Accepts both `{ "effort": "high" }` objects and bare strings.
+fn simplified_reasoning_levels_from_catalog_entry(entry: &Value) -> Option<Vec<String>> {
+    let levels = entry.get("supported_reasoning_levels")?.as_array()?;
+    let efforts: Vec<String> = levels
+        .iter()
+        .filter_map(|level| {
+            level
+                .get("effort")
+                .and_then(|value| value.as_str())
+                .or_else(|| level.as_str())
+                .map(str::trim)
+                .filter(|effort| !effort.is_empty())
+                .map(str::to_string)
+        })
+        .collect();
+    if efforts.is_empty() {
+        None
+    } else {
+        Some(efforts)
+    }
+}
+
 /// Pure reverse-parsing core: convert Codex catalog JSON text back into the
 /// frontend's simplified model-mapping shape. Returns `None` when the catalog
 /// is unparseable, has no `models` array, or yields zero valid entries.
@@ -2247,6 +2307,22 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
             if !mods.is_empty() && mods != inferred {
                 obj.insert("inputModalities".to_string(), json!(mods));
             }
+        }
+
+        // Reasoning levels must round-trip. Official #6228 wrote them into the
+        // generated catalog but `read_live_settings` rebuilt the edit form
+        // from this projection and dropped both fields, so saving the current
+        // provider wiped the DB mapping back to "not set" → none/high.
+        if let Some(levels) = simplified_reasoning_levels_from_catalog_entry(entry) {
+            obj.insert("reasoningLevels".to_string(), json!(levels));
+        }
+        if let Some(default_level) = entry
+            .get("default_reasoning_level")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|level| !level.is_empty())
+        {
+            obj.insert("defaultReasoningLevel".to_string(), json!(default_level));
         }
 
         entries.push(Value::Object(obj));
@@ -4183,9 +4259,9 @@ base_url = "https://production.api/v1"
 
     #[test]
     fn native_responses_catalog_honors_per_model_reasoning_levels() {
-        // The native template only declares none/high. A per-model
-        // reasoningLevels override must replace supported_reasoning_levels and
-        // pick a sensible default_reasoning_level.
+        // The native template now ships the full ladder (default xhigh). A
+        // per-model reasoningLevels override must still replace
+        // supported_reasoning_levels and pick a sensible default.
         let settings = json!({
             "modelCatalog": {
                 "models": [
@@ -4255,13 +4331,13 @@ base_url = "https://production.api/v1"
             Some("high")
         );
 
-        // Template default ("high") is kept when it is still in the list.
+        // Template default ("xhigh") is kept when it is still in the list.
         assert_eq!(efforts(2), vec!["none", "high", "xhigh"]);
         assert_eq!(
             models[2]
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
-            Some("high")
+            Some("xhigh")
         );
 
         // Unknown / empty efforts are dropped; the default still resolves to
@@ -4281,6 +4357,44 @@ base_url = "https://production.api/v1"
         assert_eq!(efforts(4), vec!["low", "xhigh"]);
         assert_eq!(
             models[4]
+                .get("default_reasoning_level")
+                .and_then(|v| v.as_str()),
+            Some("xhigh")
+        );
+    }
+
+    #[test]
+    fn native_responses_catalog_defaults_full_reasoning_ladder_when_omitted() {
+        // Custom openai_responses mappings used to inherit the template's
+        // none/high thinking switch. Unspecified rows must now get the full
+        // Codex ladder so switching a relay like muyuan does not collapse
+        // the picker.
+        let settings = json!({
+            "modelCatalog": {
+                "models": [{ "model": "custom-relay" }]
+            }
+        });
+
+        let catalog = codex_model_catalog_from_settings(
+            &settings,
+            "",
+            CodexCatalogToolProfile::NativeResponses,
+        )
+        .expect("catalog generation should not error")
+        .expect("non-empty modelCatalog must yield a catalog");
+
+        let efforts: Vec<&str> = catalog["models"][0]["supported_reasoning_levels"]
+            .as_array()
+            .expect("supported_reasoning_levels array")
+            .iter()
+            .filter_map(|level| level.get("effort").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(
+            efforts,
+            vec!["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        assert_eq!(
+            catalog["models"][0]
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
             Some("xhigh")
@@ -5039,6 +5153,43 @@ web_search = "disabled"
             models[1].get("contextWindow").and_then(|v| v.as_u64()),
             Some(500_000)
         );
+    }
+
+    #[test]
+    fn build_simplified_catalog_round_trips_reasoning_levels() {
+        let catalog = r#"{
+            "models": [
+                {
+                    "slug": "custom-relay",
+                    "supported_reasoning_levels": [
+                        { "effort": "none", "description": "Disable Thinking" },
+                        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+                        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" }
+                    ],
+                    "default_reasoning_level": "xhigh"
+                },
+                {
+                    "slug": "string-levels",
+                    "supported_reasoning_levels": ["low", "medium", "high"]
+                }
+            ]
+        }"#;
+        let result = build_simplified_catalog_from_texts("", catalog).expect("entries");
+        let models = result.get("models").unwrap().as_array().unwrap();
+
+        assert_eq!(
+            models[0].get("reasoningLevels"),
+            Some(&json!(["none", "high", "xhigh"]))
+        );
+        assert_eq!(
+            models[0].get("defaultReasoningLevel").and_then(|v| v.as_str()),
+            Some("xhigh")
+        );
+        assert_eq!(
+            models[1].get("reasoningLevels"),
+            Some(&json!(["low", "medium", "high"]))
+        );
+        assert!(models[1].get("defaultReasoningLevel").is_none());
     }
 
     #[test]

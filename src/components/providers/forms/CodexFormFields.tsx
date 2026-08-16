@@ -151,7 +151,27 @@ interface CodexFormFieldsProps {
 
 type CodexCatalogRow = CodexCatalogModel & { rowId: string };
 
+// Reasoning effort levels Codex understands, in ascending depth order. The
+// backend drops unknown values, so the UI only offers canonical ones.
+const CODEX_REASONING_LEVELS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+
+const DEFAULT_CATALOG_REASONING_LEVELS: string[] = [...CODEX_REASONING_LEVELS];
+const DEFAULT_CATALOG_REASONING_LEVEL = "xhigh";
+
 function createCatalogRow(seed?: Partial<CodexCatalogModel>): CodexCatalogRow {
+  const seededLevels =
+    seed?.reasoningLevels && seed.reasoningLevels.length > 0
+      ? seed.reasoningLevels
+      : undefined;
   return {
     rowId: crypto.randomUUID(),
     model: seed?.model ?? "",
@@ -166,12 +186,10 @@ function createCatalogRow(seed?: Partial<CodexCatalogModel>): CodexCatalogRow {
     ...(seed?.baseInstructions
       ? { baseInstructions: seed.baseInstructions }
       : {}),
-    ...(seed?.reasoningLevels && seed.reasoningLevels.length > 0
-      ? { reasoningLevels: seed.reasoningLevels }
-      : {}),
-    ...(seed?.defaultReasoningLevel
-      ? { defaultReasoningLevel: seed.defaultReasoningLevel }
-      : {}),
+    reasoningLevels: seededLevels ?? DEFAULT_CATALOG_REASONING_LEVELS,
+    defaultReasoningLevel:
+      seed?.defaultReasoningLevel ??
+      (seededLevels ? undefined : DEFAULT_CATALOG_REASONING_LEVEL),
   };
 }
 
@@ -203,19 +221,6 @@ function catalogRowsMatchModels(
     );
   });
 }
-
-// Reasoning effort levels Codex understands, in ascending depth order. The
-// backend drops unknown values, so the UI only offers canonical ones.
-const CODEX_REASONING_LEVELS = [
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-] as const;
 
 // Sentinel for the default-level Select: Radix Select forbids empty item
 // values, so "back to Auto" needs a non-empty value mapped to undefined.

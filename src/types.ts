@@ -279,8 +279,10 @@ export interface CodexCatalogModel {
   // falls back to a neutral default. e.g. MiMo "developed by Xiaomi".
   baseInstructions?: string;
   // Per-model reasoning effort levels exposed in the generated Codex catalog
-  // (e.g. ["none", "low", "medium", "high", "xhigh", "max"]). When omitted the
-  // backend keeps the template's conservative none/high default.
+  // (e.g. ["none", "low", "medium", "high", "xhigh", "max", "ultra"]). When
+  // omitted, NativeResponses / Anthropic mappings get the full Codex ladder
+  // (default xhigh). Official vendor catalogs and ProxyChat keep their own
+  // template.
   reasoningLevels?: string[];
   // Per-model default reasoning effort. Only meaningful together with
   // reasoningLevels; when omitted the backend keeps the template default if it
