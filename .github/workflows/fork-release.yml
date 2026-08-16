@@ -70,10 +70,10 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri App (no bundle)
-        run: pnpm tauri build --no-bundle
+      - name: Build Tauri App (MSI + exe)
+        run: pnpm tauri build --bundles msi
 
-      - name: Prepare Portable Zip
+      - name: Prepare Windows MSI and Portable Zip
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -84,6 +84,16 @@ jobs:
             Write-Error "exe not found: $exePath"
             exit 1
           }
+          $msi = Get-ChildItem -Path 'src-tauri/target/release/bundle/msi' -Recurse -Filter *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $msi) {
+            $msi = Get-ChildItem -Path 'src-tauri/target/release/bundle' -Recurse -Filter *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $msi) {
+            Write-Error 'MSI not found under src-tauri/target/release/bundle'
+            exit 1
+          }
+          Copy-Item $msi.FullName "release-assets/CC-Switch-v$version-Windows.msi"
+          Write-Host "Created: CC-Switch-v$version-Windows.msi"
           $portableDir = 'release-assets/CC-Switch-Portable'
           New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
           Copy-Item $exePath $portableDir
@@ -353,7 +363,7 @@ jobs:
             | 更新检查 | 不适配当前 fork 发布方式 | 识别本仓库 Releases，提示用户手动更新 |
             ---
             ## 下载
-            - **Windows**: `CC-Switch-v${{ env.VERSION }}-Windows-Portable.zip`（绿色便携版，解压即用）
+            - **Windows**: `CC-Switch-v${{ env.VERSION }}-Windows.msi`（安装包）或 `CC-Switch-v${{ env.VERSION }}-Windows-Portable.zip`（绿色便携版，解压即用）
             - **macOS**: `CC-Switch-v${{ env.VERSION }}-macOS.zip`（解压即用，支持 Intel 和 Apple Silicon）
             - **Linux (x86_64)**: `CC-Switch-v${{ env.VERSION }}-Linux-x86_64.deb`（Debian/Ubuntu 安装包）
             > 提示：macOS 如遇"已损坏"提示，可在终端执行：`xattr -cr "/Applications/CC Switch.app"`
