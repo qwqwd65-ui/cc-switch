@@ -5182,7 +5182,9 @@ web_search = "disabled"
             Some(&json!(["none", "high", "xhigh"]))
         );
         assert_eq!(
-            models[0].get("defaultReasoningLevel").and_then(|v| v.as_str()),
+            models[0]
+                .get("defaultReasoningLevel")
+                .and_then(|v| v.as_str()),
             Some("xhigh")
         );
         assert_eq!(
