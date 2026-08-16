@@ -93,7 +93,7 @@ export function GeminiFormFields({
       undefined,
       undefined,
       undefined,
-      upstreamProxyUrl,
+      { upstreamProxyUrl },
     )
       .then((models) => {
         setFetchedModels(models);
