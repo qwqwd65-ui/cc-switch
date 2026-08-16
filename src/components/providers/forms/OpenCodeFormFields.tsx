@@ -218,14 +218,9 @@ export function OpenCodeFormFields({
       return;
     }
     setIsFetchingModels(true);
-    fetchModelsForConfig(
-      baseUrl,
-      apiKey,
-      undefined,
-      undefined,
-      undefined,
-      { upstreamProxyUrl },
-    )
+    fetchModelsForConfig(baseUrl, apiKey, undefined, undefined, undefined, {
+      upstreamProxyUrl,
+    })
       .then((models) => {
         setFetchedModels(models);
         if (models.length === 0) {
