@@ -16,11 +16,7 @@ import type { ProvidersQueryData } from "@/lib/query/queries";
 import { proxyKeys } from "@/lib/query/proxy";
 import { usageKeys } from "@/lib/query/usage";
 import { invalidatePiProviderCaches } from "@/lib/query/pi";
-import { resolveManagedAccountId } from "@/lib/authBinding";
-import {
-  CODEX_OFFICIAL_PROVIDER_ID,
-  GROKBUILD_OFFICIAL_PROVIDER_ID,
-} from "@/utils/providerCapabilities";
+import { GROKBUILD_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
 
 const sortProvidersForInsert = (
   providers: Record<string, Provider>,
@@ -50,7 +46,6 @@ export const useAddProviderMutation = (appId: AppId) => {
         providerKey?: string;
         addToLive?: boolean;
         ensureClaudeDesktopOfficialSeed?: boolean;
-        ensureCodexOfficialSeed?: boolean;
         ensureGrokBuildOfficialSeed?: boolean;
       },
     ) => {
@@ -58,7 +53,6 @@ export const useAddProviderMutation = (appId: AppId) => {
         providerKey: _providerKey,
         addToLive,
         ensureClaudeDesktopOfficialSeed,
-        ensureCodexOfficialSeed,
         ensureGrokBuildOfficialSeed,
         ...rest
       } = providerInput;
@@ -71,34 +65,6 @@ export const useAddProviderMutation = (appId: AppId) => {
           throw new Error("Claude Desktop official provider was not created");
         }
         return officialProvider;
-      }
-
-      if (appId === "codex" && ensureCodexOfficialSeed) {
-        // The fixed seed is the one native "Codex current login" card.
-        // A managed account gets its own provider row so several accounts can
-        // coexist without replacing that native-login entry.
-        const managedAccountId = resolveManagedAccountId(
-          rest.meta,
-          "codex_oauth",
-        )?.trim();
-        if (!managedAccountId) {
-          await providersApi.ensureCodexOfficialProvider();
-          const providers = await providersApi.getAll(appId);
-          const nativeLoginProvider = providers[CODEX_OFFICIAL_PROVIDER_ID];
-          if (!nativeLoginProvider) {
-            throw new Error("Codex current-login provider was not created");
-          }
-          return nativeLoginProvider;
-        }
-
-        const managedOfficialProvider: Provider = {
-          ...rest,
-          id: generateUUID(),
-          category: "official",
-          createdAt: Date.now(),
-        };
-        await providersApi.add(managedOfficialProvider, appId, addToLive);
-        return managedOfficialProvider;
       }
 
       if (appId === "grokbuild" && ensureGrokBuildOfficialSeed) {
