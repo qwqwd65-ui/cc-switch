@@ -108,7 +108,7 @@ export const useAddProviderMutation = (appId: AppId) => {
       };
       delete (newProvider as any).providerKey;
 
-      if (newProvider.sortIndex === undefined && appId !== "codex") {
+      if (newProvider.sortIndex === undefined) {
         let existingProviders =
           queryClient.getQueryData<ProvidersQueryData>(["providers", appId])
             ?.providers ?? {};
