@@ -162,7 +162,8 @@ describe("useAddProviderMutation", () => {
       }),
     );
 
-    expect(apiMocks.getAll).not.toHaveBeenCalled();
+    expect(apiMocks.getAll).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getAll).toHaveBeenCalledWith("codex");
     expect(apiMocks.add).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "generated-uuid",
@@ -218,7 +219,8 @@ describe("useAddProviderMutation", () => {
       }),
     );
 
-    expect(apiMocks.getAll).not.toHaveBeenCalled();
+    expect(apiMocks.getAll).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getAll).toHaveBeenCalledWith("codex");
     expect(apiMocks.add).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({

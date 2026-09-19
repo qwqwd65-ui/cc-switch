@@ -2212,14 +2212,15 @@ fn codex_vendor_catalog_model_entry(
 
 /// Fields Codex's external-catalog parser REQUIRES (no serde default): when
 /// one is missing Codex rejects the whole catalog file at startup ("missing
-/// field ..."). `base_instructions` is the other known required field; the
-/// templates always carry it and `codex_catalog_model_entry` handles it.
-/// When Codex requires a new field, add it here AND to the static templates.
+/// field ..."). `base_instructions` is likewise required on older parsers
+/// (<=0.144.5 read it as a plain field; newer builds moved it into
+/// `model_messages`), so a `models_cache.json` written by a newer Codex must
+/// be backfilled too. When Codex requires a new field, add it here AND to the
+/// static templates.
 const CODEX_CATALOG_PARSER_REQUIRED_FIELDS: &[&str] = &[
     "supports_reasoning_summaries",
-    // codex 0.148.0 rejects the catalog without it (#6661); a models_cache.json
-    // written by an older build can lack it.
     "supports_parallel_tool_calls",
+    "base_instructions",
 ];
 
 /// `models_cache.json` is shared by every Codex install on the machine (npm
@@ -7573,6 +7574,19 @@ wire_api = "responses"
             .get("base_instructions")
             .and_then(|v| v.as_str())
             .is_some_and(|s| !s.trim().is_empty()));
+
+        // Regression guard for #6347: cloned entries must preserve the full
+        // reasoning-level set from the flagship model (low/high/max), not just
+        // a single level.
+        let reasoning_levels = entry
+            .get("supported_reasoning_levels")
+            .and_then(|v| v.as_array())
+            .expect("cloned entry must have supported_reasoning_levels");
+        assert!(
+            reasoning_levels.len() >= 3,
+            "DeepSeek official catalog has low/high/max; got {:?}",
+            reasoning_levels
+        );
     }
 
     #[test]

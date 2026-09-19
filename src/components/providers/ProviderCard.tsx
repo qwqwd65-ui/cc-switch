@@ -11,7 +11,11 @@ import type {
   DraggableAttributes,
   DraggableSyntheticListeners,
 } from "@dnd-kit/core";
-import type { OpenClawProviderConfig, Provider } from "@/types";
+import type {
+  OpenClawProviderConfig,
+  OpenCodeProviderConfig,
+  Provider,
+} from "@/types";
 import type { AppId } from "@/lib/api";
 import { authApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -213,6 +217,48 @@ const extractModelBadge = (
     if (typeof toml === "string") {
       const match = toml.match(/^model\s*=\s*"([^"]+)"/m);
       if (match?.[1]) return { label: match[1], title: match[1] };
+    }
+  }
+
+  if (appId === "opencode") {
+    const openCodeConfig = config as OpenCodeProviderConfig;
+    const models = openCodeConfig?.models;
+    if (models && typeof models === "object") {
+      const modelKeys = Object.keys(models);
+      if (modelKeys.length > 0) {
+        const firstModelKey = modelKeys[0];
+        const firstModel = models[firstModelKey];
+        const label = firstModel.name || firstModelKey;
+        return { label, title: label };
+      }
+    }
+  }
+
+  if (appId === "openclaw") {
+    const openClawConfig = config as OpenClawProviderConfig;
+    const models = openClawConfig?.models;
+    if (Array.isArray(models) && models.length > 0) {
+      const firstModel = models[0];
+      const label = firstModel.name || firstModel.id;
+      return { label, title: label };
+    }
+  }
+
+  if (appId === "hermes") {
+    const models = (config as Record<string, any>)?.models;
+    if (Array.isArray(models) && models.length > 0) {
+      const firstModel = models[0];
+      const label = firstModel.name || firstModel.id;
+      return { label, title: label };
+    }
+  }
+
+  if (appId === "grokbuild") {
+    const models = (config as Record<string, any>)?.models;
+    if (Array.isArray(models) && models.length > 0) {
+      const firstModel = models[0];
+      const label = firstModel.name || firstModel.id;
+      return { label, title: label };
     }
   }
 
