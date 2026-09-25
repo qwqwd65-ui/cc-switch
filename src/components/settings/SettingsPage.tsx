@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { motion } from "framer-motion";
 import {
   Loader2,
   Save,
@@ -107,11 +106,11 @@ export function SettingsPage({
 
   const { data: installedSkills } = useInstalledSkills();
 
-  const [activeTab, setActiveTab] = useState<string>("general");
+  const [activeTab, setActiveTab] = useState<string>(() => defaultTab);
   const [showRestartPrompt, setShowRestartPrompt] = useState(false);
   const tabScrollContainerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (open) {
       setActiveTab(defaultTab);
       resetStatus();
@@ -246,12 +245,7 @@ export function SettingsPage({
             >
               <TabsContent value="general" className="space-y-6 mt-0">
                 {settings ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    className="space-y-6"
-                  >
+                  <div className="space-y-6">
                     <LanguageSettings
                       value={settings.language}
                       onChange={(lang) => handleAutoSave({ language: lang })}
@@ -288,7 +282,7 @@ export function SettingsPage({
                         handleAutoSave({ preferredTerminal: terminal })
                       }
                     />
-                  </motion.div>
+                  </div>
                 ) : null}
               </TabsContent>
 
@@ -302,24 +296,14 @@ export function SettingsPage({
               </TabsContent>
 
               <TabsContent value="auth" className="space-y-6 mt-0 pb-4">
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="space-y-6"
-                >
+                <div className="space-y-6">
                   <AuthCenterPanel />
-                </motion.div>
+                </div>
               </TabsContent>
 
               <TabsContent value="advanced" className="space-y-6 mt-0 pb-4">
                 {settings ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    className="space-y-4"
-                  >
+                  <div className="space-y-4">
                     <Accordion
                       type="multiple"
                       defaultValue={[]}
@@ -502,7 +486,7 @@ export function SettingsPage({
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>
-                  </motion.div>
+                  </div>
                 ) : null}
               </TabsContent>
 

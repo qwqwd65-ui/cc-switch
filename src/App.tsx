@@ -1,6 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
@@ -1117,15 +1123,8 @@ function App() {
                 ref={providerScrollContainerRef}
                 className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1"
               >
-                <AnimatePresence mode="wait">
-                  <motion.div
-                    key={activeApp}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.15 }}
-                    className="space-y-4"
-                  >
+                <Fragment key={activeApp}>
+                  <div className="space-y-4">
                     <ProviderList
                       providers={providers}
                       currentProviderId={currentProviderId}
@@ -1180,8 +1179,8 @@ function App() {
                             : undefined
                       }
                     />
-                  </motion.div>
-                </AnimatePresence>
+                  </div>
+                </Fragment>
               </div>
             </div>
           );
@@ -1189,18 +1188,12 @@ function App() {
     })();
 
     return (
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={currentView}
-          className="flex flex-1 min-h-0 flex-col"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-        >
-          {content}
-        </motion.div>
-      </AnimatePresence>
+      <div
+        key={currentView}
+        className="flex flex-1 min-h-0 flex-col bg-background"
+      >
+        {content}
+      </div>
     );
   };
 
@@ -1592,23 +1585,18 @@ function App() {
                 {currentView === "providers" && (
                   <>
                     <div className="flex items-center gap-1 p-1 bg-muted rounded-xl">
-                      <AnimatePresence mode="wait">
-                        <motion.div
-                          key={
-                            activeApp === "openclaw"
-                              ? "openclaw"
-                              : activeApp === "hermes"
-                                ? "hermes"
-                                : activeApp === "grokbuild"
-                                  ? "grokbuild"
-                                  : "default"
-                          }
-                          className="flex items-center gap-1"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: 0.15 }}
-                        >
+                      <Fragment
+                        key={
+                          activeApp === "openclaw"
+                            ? "openclaw"
+                            : activeApp === "hermes"
+                              ? "hermes"
+                              : activeApp === "grokbuild"
+                                ? "grokbuild"
+                                : "default"
+                        }
+                      >
+                        <div className="flex items-center gap-1">
                           {activeApp === "hermes" ? (
                             <>
                               <Button
@@ -1752,8 +1740,8 @@ function App() {
                               )}
                             </>
                           )}
-                        </motion.div>
-                      </AnimatePresence>
+                        </div>
+                      </Fragment>
                     </div>
 
                     <Button
@@ -1775,7 +1763,7 @@ function App() {
 
       <main
         ref={mainScrollRef}
-        className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in"
+        className="flex-1 min-h-0 flex flex-col overflow-y-auto"
       >
         {isOpenClawView && openclawHealthWarnings.length > 0 && (
           <OpenClawHealthBanner warnings={openclawHealthWarnings} />

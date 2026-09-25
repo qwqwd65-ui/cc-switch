@@ -7,6 +7,7 @@ import { SettingsPage } from "@/components/settings/SettingsPage";
 
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
+const tabsValueHistory = vi.hoisted(() => [] as string[]);
 
 vi.mock("sonner", () => ({
   toast: {
@@ -155,11 +156,14 @@ vi.mock("@/components/ui/dialog", () => ({
 
 vi.mock("@/components/ui/tabs", () => {
   return {
-    Tabs: ({ value, onValueChange, children }: any) => (
-      <TabsContext.Provider value={{ value, onValueChange }}>
-        <div data-testid="tabs">{children}</div>
-      </TabsContext.Provider>
-    ),
+    Tabs: ({ value, onValueChange, children }: any) => {
+      tabsValueHistory.push(value);
+      return (
+        <TabsContext.Provider value={{ value, onValueChange }}>
+          <div data-testid="tabs">{children}</div>
+        </TabsContext.Provider>
+      );
+    },
     TabsList: ({ children }: any) => <div>{children}</div>,
     TabsTrigger: ({ value, children }: any) => {
       const ctx = useContext(TabsContext);
@@ -230,6 +234,10 @@ vi.mock("@/components/settings/AboutSection", () => ({
   AboutSection: ({ isPortable }: any) => <div>about:{String(isPortable)}</div>,
 }));
 
+vi.mock("@/components/usage/UsageDashboard", () => ({
+  UsageDashboard: () => <div>usage-dashboard</div>,
+}));
+
 vi.mock("@/components/settings/WebdavSyncSection", () => ({
   WebdavSyncSection: ({ config }: any) => (
     <div>webdav-sync-section:{config?.baseUrl ?? "none"}</div>
@@ -266,6 +274,7 @@ describe("SettingsPage Component", () => {
       },
     );
     lastUseImportExportOptions = undefined;
+    tabsValueHistory.length = 0;
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     settingsApi = (await import("@/lib/api")).settingsApi;
@@ -284,6 +293,14 @@ describe("SettingsPage Component", () => {
     expect(screen.queryByText("language:zh")).not.toBeInTheDocument();
     // 加载状态下显示 spinner 而不是表单内容
     expect(document.querySelector(".animate-spin")).toBeInTheDocument();
+  });
+
+  it("should render the requested default tab on the first pass", () => {
+    renderSettingsPage({ defaultTab: "usage" });
+
+    expect(tabsValueHistory[0]).toBe("usage");
+    expect(screen.getByTestId("tab-usage")).toBeInTheDocument();
+    expect(screen.queryByTestId("tab-general")).not.toBeInTheDocument();
   });
 
   it("should reset import/export status when dialog transitions to open", () => {

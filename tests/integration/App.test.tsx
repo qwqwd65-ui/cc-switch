@@ -226,6 +226,7 @@ describe("App integration with MSW", () => {
     );
 
     fireEvent.click(screen.getByText("switch-codex"));
+    expect(getProviderListText(view)).not.toContain("claude-1");
     await waitFor(() => expect(getProviderListText(view)).toContain("codex-1"));
 
     fireEvent.click(screen.getByText("usage"));
@@ -299,6 +300,25 @@ describe("App integration with MSW", () => {
     expect(providerScrollContainer!.scrollTop).toBe(0);
     expect(providerScrollContainer!.scrollLeft).toBe(0);
   }, 10_000);
+
+  it("replaces top-level views atomically without retaining stale content", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    expect(await screen.findByTestId("provider-list")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle("common.settings"));
+
+    expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "common.back" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "common.back" }));
+
+    expect(screen.queryByText("settings.tabGeneral")).not.toBeInTheDocument();
+    expect(screen.getByTestId("provider-list")).toBeInTheDocument();
+  });
 
   it("shows toast when auto sync fails in background", async () => {
     const { default: App } = await import("@/App");
