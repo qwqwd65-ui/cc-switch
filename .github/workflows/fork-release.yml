@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（如 v3.20.4-fork.1 或 3.20.4-fork.1，v 前缀会自动去除）"
+        description: "版本号（如 v3.20.4-fork.2 或 3.20.4-fork.2，v 前缀会自动去除）"
         required: true
         type: string
 
@@ -74,7 +74,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build signed NSIS updater
-        run: pnpm tauri build --bundles nsis
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pnpm tauri --version
+          & pnpm tauri build --bundles nsis 2>&1 | Tee-Object -FilePath tauri-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Select-String -Path tauri-build.log -SimpleMatch '__TAURI_BUNDLE_TYPE variable not found in binary') {
+            throw 'Tauri CLI failed to patch the bundle type into the Windows binary'
+          }
 
       - name: Prepare Windows assets
         shell: pwsh
@@ -183,7 +191,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build signed macOS updater
-        run: pnpm tauri build --target universal-apple-darwin --bundles app
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm tauri --version
+          pnpm tauri build --target universal-apple-darwin --bundles app 2>&1 | tee tauri-build.log
+          if grep -Fq '__TAURI_BUNDLE_TYPE variable not found in binary' tauri-build.log; then
+            echo 'Tauri CLI failed to patch the bundle type into the macOS binary' >&2
+            exit 1
+          fi
 
       - name: Prepare macOS assets
         shell: bash
@@ -287,7 +303,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build signed Linux updater
-        run: pnpm tauri build --bundles appimage,deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm tauri --version
+          pnpm tauri build --bundles appimage,deb 2>&1 | tee tauri-build.log
+          if grep -Fq '__TAURI_BUNDLE_TYPE variable not found in binary' tauri-build.log; then
+            echo 'Tauri CLI failed to patch the bundle type into the Linux binary' >&2
+            exit 1
+          fi
 
       - name: Prepare Linux assets
         shell: bash
