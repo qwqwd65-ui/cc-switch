@@ -181,6 +181,10 @@ vi.mock("@/components/UpdateBadge", () => ({
   ),
 }));
 
+vi.mock("@/components/settings/SettingsPage", () => ({
+  SettingsPage: () => <div data-testid="settings-page" />,
+}));
+
 vi.mock("@/components/mcp/McpPanel", () => ({
   default: ({ open, onOpenChange }: any) =>
     open ? (
@@ -310,13 +314,14 @@ describe("App integration with MSW", () => {
     fireEvent.click(screen.getByTitle("common.settings"));
 
     expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-page")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "common.back" }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "common.back" }));
 
-    expect(screen.queryByText("settings.tabGeneral")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
     expect(screen.getByTestId("provider-list")).toBeInTheDocument();
   });
 
