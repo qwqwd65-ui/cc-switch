@@ -1,10 +1,10 @@
-name: Fork Release (Win Portable + macOS + Linux deb)
+name: Fork Release (Signed In-App Updater)
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 v3.11.0-fork.5 或 3.11.0-fork.5，v 前缀会自动去除)'
+        description: "版本号（如 v3.20.4-fork.1 或 3.20.4-fork.1，v 前缀会自动去除）"
         required: true
         type: string
 
@@ -17,346 +17,370 @@ concurrency:
 
 jobs:
   build-windows:
+    name: Windows NSIS + Portable
     runs-on: windows-2022
+    timeout-minutes: 75
     env:
       VERSION: ${{ inputs.version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Update version in config files
-        shell: bash
-        run: |
-          # 去掉 v 前缀
-          VERSION="${VERSION#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          # 更新 package.json
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
-          # 更新 Cargo.toml
-          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
-          # 更新 tauri.conf.json
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
-          # fork 发布流不产出 updater 包，避免要求 signing key
-          sed -i "s/\"createUpdaterArtifacts\": true/\"createUpdaterArtifacts\": false/" src-tauri/tauri.conf.json
-          echo "Updated version to $VERSION"
-          grep -E '"version"|^version =|"createUpdaterArtifacts"' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 10.12.3
-          run_install: false
-
-      - name: Get pnpm store directory
-        id: pnpm-store
         shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          corepack install
+          pnpm --version
 
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
+      - name: Update release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
+          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+          grep -E '"version"|^version =|"createUpdaterArtifacts"' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+
+      - name: Verify updater signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo 'TAURI_SIGNING_PRIVATE_KEY is missing' >&2; exit 1; }
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" || { echo 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing' >&2; exit 1; }
+
+      - name: Cache pnpm store
+        uses: actions/cache@v5
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: windows-x64-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: windows-x64-pnpm-store-
+          path: ~/.pnpm-store
+          key: windows-x64-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: windows-x64-pnpm-
 
-      - name: Install frontend deps
+      - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri App (no bundle)
-        run: pnpm tauri build --no-bundle
+      - name: Build signed NSIS updater
+        run: pnpm tauri build --bundles nsis
 
-      - name: Prepare Portable Zip
+      - name: Prepare Windows assets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
           $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+
+          $installer = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -like '*setup.exe' } |
+            Select-Object -First 1
+          if ($null -eq $installer) {
+            $installer = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Recurse -Filter '*.exe' |
+              Select-Object -First 1
+          }
+          if ($null -eq $installer) {
+            throw 'NSIS installer was not generated'
+          }
+          $signature = "$($installer.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signature)) {
+            throw "Updater signature was not generated for $($installer.Name)"
+          }
+
+          $setupName = "CC-Switch-v$version-Windows-Setup.exe"
+          Copy-Item -LiteralPath $installer.FullName -Destination "release-assets/$setupName"
+          Copy-Item -LiteralPath $signature -Destination "release-assets/$setupName.sig"
+
           $exePath = 'src-tauri/target/release/cc-switch.exe'
-          if (-not (Test-Path $exePath)) {
-            Write-Error "exe not found: $exePath"
-            exit 1
+          if (-not (Test-Path -LiteralPath $exePath)) {
+            throw "Portable executable not found: $exePath"
           }
           $portableDir = 'release-assets/CC-Switch-Portable'
           New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
-          Copy-Item $exePath $portableDir
+          Copy-Item -LiteralPath $exePath -Destination $portableDir
           @('# CC Switch portable build marker', 'portable=true') |
             Set-Content -Path (Join-Path $portableDir 'portable.ini') -Encoding UTF8
-          $zipName = "CC-Switch-v$version-Windows-Portable.zip"
-          Compress-Archive -Path "$portableDir/*" -DestinationPath "release-assets/$zipName" -Force
-          Remove-Item -Recurse -Force $portableDir
-          Write-Host "Created: $zipName"
+          Compress-Archive -Path "$portableDir/*" -DestinationPath "release-assets/CC-Switch-v$version-Windows-Portable.zip" -Force
+          Remove-Item -Recurse -Force -LiteralPath $portableDir
 
-      - name: Upload Windows Artifact
+          Get-ChildItem release-assets | Format-Table Name, Length
+
+      - name: Upload Windows assets
         uses: actions/upload-artifact@v4
         with:
-          name: windows-portable
+          name: windows-assets
           path: release-assets/*
+          if-no-files-found: error
 
   build-macos:
+    name: macOS Universal + Updater
     runs-on: macos-14
+    timeout-minutes: 90
     env:
       VERSION: ${{ inputs.version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Update version in config files
-        shell: bash
-        run: |
-          # 去掉 v 前缀
-          VERSION="${VERSION#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          # 更新 package.json
-          sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
-          # 更新 Cargo.toml
-          sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
-          # 更新 tauri.conf.json
-          sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
-          # fork 发布流不产出 updater 包，避免要求 signing key
-          sed -i '' "s/\"createUpdaterArtifacts\": true/\"createUpdaterArtifacts\": false/" src-tauri/tauri.conf.json
-          echo "Updated version to $VERSION"
-          grep -E '"version"|^version =|"createUpdaterArtifacts"' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Add macOS targets
-        run: |
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 10.12.3
-          run_install: false
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          corepack install
+          pnpm --version
 
-      - name: Get pnpm store directory
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: macos-arm64-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: macos-arm64-pnpm-store-
-
-      - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Tauri App (macOS Universal)
-        run: pnpm tauri build --target universal-apple-darwin
-
-      - name: Prepare macOS Zip
+      - name: Update release version
         shell: bash
         run: |
-          set -euxo pipefail
-          mkdir -p release-assets
-          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
-          APP_PATH=""
-          for path in \
-            "src-tauri/target/universal-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/aarch64-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/release/bundle/macos"; do
-            if [ -d "$path" ]; then
-              APP_PATH=$(find "$path" -maxdepth 1 -name "*.app" -type d | head -1 || true)
-              [ -n "$APP_PATH" ] && break
-            fi
-          done
-          if [ -z "$APP_PATH" ]; then
-            echo "No .app found" >&2
-            exit 1
-          fi
-          APP_DIR=$(dirname "$APP_PATH")
-          APP_NAME=$(basename "$APP_PATH")
-          NEW_ZIP="CC-Switch-v${VERSION}-macOS.zip"
-          cd "$APP_DIR"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "$NEW_ZIP"
-          mv "$NEW_ZIP" "$GITHUB_WORKSPACE/release-assets/"
-          echo "macOS zip ready: $NEW_ZIP"
-
-      - name: Upload macOS Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-zip
-          path: release-assets/*
-
-  build-linux:
-    runs-on: ubuntu-22.04
-    env:
-      VERSION: ${{ inputs.version }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Update version in config files
-        shell: bash
-        run: |
-          # 去掉 v 前缀
+          set -euo pipefail
           VERSION="${VERSION#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          # 更新 package.json
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
-          # 更新 Cargo.toml
-          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
-          # 更新 tauri.conf.json
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
-          # fork 发布流不产出 updater 包，避免要求 signing key
-          sed -i "s/\"createUpdaterArtifacts\": true/\"createUpdaterArtifacts\": false/" src-tauri/tauri.conf.json
-          echo "Updated version to $VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
+          sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
           grep -E '"version"|^version =|"createUpdaterArtifacts"' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Verify updater signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo 'TAURI_SIGNING_PRIVATE_KEY is missing' >&2; exit 1; }
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" || { echo 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing' >&2; exit 1; }
+
+      - name: Cache pnpm store
+        uses: actions/cache@v5
         with:
-          node-version: '20'
+          path: ~/Library/pnpm/store
+          key: macos-universal-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: macos-universal-pnpm-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build signed macOS updater
+        run: pnpm tauri build --target universal-apple-darwin --bundles app
+
+      - name: Prepare macOS assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          bundle_dir='src-tauri/target/universal-apple-darwin/release/bundle/macos'
+          app_path=$(find "$bundle_dir" -maxdepth 1 -name '*.app' -type d | head -1)
+          updater_path=$(find "$bundle_dir" -maxdepth 1 -name '*.tar.gz' -type f | head -1)
+          test -n "$app_path" || { echo 'macOS .app was not generated' >&2; exit 1; }
+          test -n "$updater_path" || { echo 'macOS updater archive was not generated' >&2; exit 1; }
+          test -f "$updater_path.sig" || { echo 'macOS updater signature was not generated' >&2; exit 1; }
+
+          updater_name="CC-Switch-v${VERSION}-macOS.tar.gz"
+          cp "$updater_path" "release-assets/$updater_name"
+          cp "$updater_path.sig" "release-assets/$updater_name.sig"
+
+          app_dir=$(dirname "$app_path")
+          app_name=$(basename "$app_path")
+          (
+            cd "$app_dir"
+            ditto -c -k --sequesterRsrc --keepParent "$app_name" "$GITHUB_WORKSPACE/release-assets/CC-Switch-v${VERSION}-macOS.zip"
+          )
+          ls -la release-assets
+
+      - name: Upload macOS assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux AppImage + deb
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ inputs.version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux system deps
+      - name: Install Linux system dependencies
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            pkg-config \
-            curl \
-            wget \
-            file \
-            patchelf \
-            libssl-dev \
-            rpm \
-            flatpak \
-            flatpak-builder \
-            elfutils \
-            xdg-utils
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev \
-            librsvg2-dev \
-            libayatana-appindicator3-dev
+            build-essential pkg-config curl wget file patchelf libssl-dev \
+            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
             || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
           sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
             || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 10.12.3
-          run_install: false
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          corepack install
+          pnpm --version
 
-      - name: Get pnpm store directory
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: linux-x64-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: linux-x64-pnpm-store-
-
-      - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Tauri App (Linux deb)
-        run: pnpm tauri build --bundles deb
-
-      - name: Prepare Linux deb
+      - name: Update release version
         shell: bash
         run: |
-          set -euxo pipefail
-          mkdir -p release-assets
-          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
-          DEB=$(find src-tauri/target/release/bundle -name "*.deb" | head -1 || true)
-          if [ -z "$DEB" ]; then
-            echo "No .deb found under src-tauri/target/release/bundle" >&2
-            exit 1
-          fi
-          NEW_DEB="CC-Switch-v${VERSION}-Linux-x86_64.deb"
-          cp "$DEB" "release-assets/$NEW_DEB"
-          echo "Linux deb ready: $NEW_DEB"
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
+          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+          grep -E '"version"|^version =|"createUpdaterArtifacts"' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
 
-      - name: Upload Linux Artifact
+      - name: Verify updater signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo 'TAURI_SIGNING_PRIVATE_KEY is missing' >&2; exit 1; }
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" || { echo 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing' >&2; exit 1; }
+
+      - name: Cache pnpm store
+        uses: actions/cache@v5
+        with:
+          path: ~/.local/share/pnpm/store
+          key: linux-x64-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: linux-x64-pnpm-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build signed Linux updater
+        run: pnpm tauri build --bundles appimage,deb
+
+      - name: Prepare Linux assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          appimage=$(find src-tauri/target/release/bundle -name '*.AppImage' -type f | head -1)
+          deb=$(find src-tauri/target/release/bundle -name '*.deb' -type f | head -1)
+          test -n "$appimage" || { echo 'Linux AppImage was not generated' >&2; exit 1; }
+          test -f "$appimage.sig" || { echo 'Linux AppImage signature was not generated' >&2; exit 1; }
+          test -n "$deb" || { echo 'Linux deb was not generated' >&2; exit 1; }
+
+          appimage_name="CC-Switch-v${VERSION}-Linux-x86_64.AppImage"
+          cp "$appimage" "release-assets/$appimage_name"
+          cp "$appimage.sig" "release-assets/$appimage_name.sig"
+          cp "$deb" "release-assets/CC-Switch-v${VERSION}-Linux-x86_64.deb"
+          ls -la release-assets
+
+      - name: Upload Linux assets
         uses: actions/upload-artifact@v4
         with:
-          name: linux-deb
+          name: linux-assets
           path: release-assets/*
+          if-no-files-found: error
 
   create-release:
+    name: Publish signed Fork Release
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - name: Strip v prefix
+      - name: Checkout manifest generator
+        uses: actions/checkout@v6
+
+      - name: Normalize version
+        shell: bash
         run: |
           VERSION="${VERSION#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=v$VERSION" >> "$GITHUB_ENV"
 
-      - name: Download Windows Artifact
+      - name: Download Windows assets
         uses: actions/download-artifact@v4
         with:
-          name: windows-portable
+          name: windows-assets
           path: release-assets
 
-      - name: Download macOS Artifact
+      - name: Download macOS assets
         uses: actions/download-artifact@v4
         with:
-          name: macos-zip
+          name: macos-assets
           path: release-assets
 
-      - name: Download Linux Artifact
+      - name: Download Linux assets
         uses: actions/download-artifact@v4
         with:
-          name: linux-deb
+          name: linux-assets
           path: release-assets
 
-      - name: List Assets
-        run: ls -la release-assets/
+      - name: Generate and validate latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/generate-updater-manifest.mjs \
+            release-assets "$TAG" "$GITHUB_REPOSITORY" release-assets/latest.json
+          node -e "const m=require('./release-assets/latest.json'); if(Object.keys(m.platforms).length !== 4) process.exit(1); console.log(m)"
+          ls -la release-assets
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
           name: CC Switch v${{ env.VERSION }}
           prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
           body: |
-            ## 与上游的区别
-            | 功能 | 官方版 | 自用增强版 |
-            |------|--------|------------|
-            | 供应商卡片 | 主要显示供应商名称 | 名称后直接显示当前模型名，切换时更直观 |
-            | 获取模型列表 | 获取后主要用于填充模型输入 | 获取后可直接搜索模型，匹配和选择更方便 |
-            | 新增供应商位置 | 默认排到列表最后 | 默认插入到第二位，便于立即调整和使用 |
-            | 供应商右键菜单 | 无快捷排序操作 | 支持右键置顶 / 置底 |
-            | 托盘左键单击 | 弹出菜单 | 直接切换主窗口显示 / 隐藏 |
-            | 测试模型按钮 | 入口较弱或默认隐藏 | 已恢复测试模型按钮，可直接验证当前供应商连通性 |
-            | 测试参数配置 | 高级测试配置入口较弱 | 保留高级测试参数配置，可调超时、重试、降级阈值和提示词 |
-            | 测试提示词 | 固定单条提示词 | 内置 18 条提示词池中随机选取，并支持用户自定义 |
-            | 更新检查 | 不适配当前 fork 发布方式 | 识别本仓库 Releases，提示用户手动更新 |
-            ---
-            ## 下载
-            - **Windows**: `CC-Switch-v${{ env.VERSION }}-Windows-Portable.zip`（绿色便携版，解压即用）
-            - **macOS**: `CC-Switch-v${{ env.VERSION }}-macOS.zip`（解压即用，支持 Intel 和 Apple Silicon）
-            - **Linux (x86_64)**: `CC-Switch-v${{ env.VERSION }}-Linux-x86_64.deb`（Debian/Ubuntu 安装包）
-            > 提示：macOS 如遇"已损坏"提示，可在终端执行：`xattr -cr "/Applications/CC Switch.app"`
+            ## Fork 应用内自动更新
+
+            本版本启用 Tauri 签名更新器。安装版用户后续可在应用内完成检查、下载、验签、安装和重启。
+
+            | 平台 | 推荐下载 | 应用内更新 |
+            |------|----------|------------|
+            | Windows x64 | `CC-Switch-v${{ env.VERSION }}-Windows-Setup.exe` | 支持 |
+            | Windows Portable | `CC-Switch-v${{ env.VERSION }}-Windows-Portable.zip` | 手动替换 |
+            | macOS Universal | `CC-Switch-v${{ env.VERSION }}-macOS.zip` | 支持 |
+            | Linux x86_64 | `CC-Switch-v${{ env.VERSION }}-Linux-x86_64.AppImage` | 支持 |
+            | Debian/Ubuntu | `CC-Switch-v${{ env.VERSION }}-Linux-x86_64.deb` | 手动安装 |
+
+            `latest.json`、`.sig` 和 `.tar.gz` 是应用内更新所需资产，无需手动下载。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   Download,
   Copy,
@@ -45,6 +46,11 @@ import { ToolInstallRow } from "./ToolInstallRow";
 
 interface AboutSectionProps {
   isPortable: boolean;
+}
+
+interface UpdateDownloadProgress {
+  downloaded: number;
+  total: number | null;
 }
 
 interface ToolVersion {
@@ -229,6 +235,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     () => appVersionCache === null,
   );
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
   const [toolVersions, setToolVersions] = useState<ToolVersion[]>(
     () => toolVersionsCache?.data ?? [],
   );
@@ -447,13 +454,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
       if (!displayVersion) {
         await settingsApi.openExternal(
-          "https://github.com/kongkongyo/cc-switch/releases",
+          "https://github.com/qwqwd65-ui/cc-switch/releases",
         );
         return;
       }
 
       await settingsApi.openExternal(
-        `https://github.com/kongkongyo/cc-switch/releases/tag/${displayVersion}`,
+        `https://github.com/qwqwd65-ui/cc-switch/releases/tag/${displayVersion}`,
       );
     } catch (error) {
       console.error("[AboutSection] Failed to open release notes", error);
@@ -468,14 +475,56 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   const handleCheckUpdate = useCallback(async () => {
     if (hasUpdate && updateInfo?.releaseUrl) {
       setIsDownloading(true);
+      setDownloadPercent(null);
+      let unlistenProgress: (() => void) | null = null;
+
       try {
         resetDismiss();
-        await settingsApi.openExternal(updateInfo.releaseUrl);
+
+        // Portable builds cannot safely replace their running executable. Keep the
+        // explicit manual fallback while installed builds use the signed updater.
+        if (isPortable) {
+          await settingsApi.openExternal(updateInfo.releaseUrl);
+          return;
+        }
+
+        unlistenProgress = await listen<UpdateDownloadProgress>(
+          "update-download-progress",
+          ({ payload }) => {
+            const total = payload.total;
+            setDownloadPercent(
+              total && total > 0
+                ? Math.min(100, Math.round((payload.downloaded / total) * 100))
+                : null,
+            );
+          },
+        );
+
+        // On success the backend installs the signed artifact and restarts the app.
+        // Returning false means the release changed between discovery and install.
+        const started = await settingsApi.installUpdateAndRestart();
+        if (!started) {
+          setDownloadPercent(null);
+          toast.success(t("settings.upToDate"), { closeButton: true });
+          await checkUpdate();
+        }
       } catch (error) {
-        console.error("[AboutSection] Open release page failed", error);
-        toast.error(t("settings.updateFailed"));
+        console.error("[AboutSection] In-app update failed", error);
+        toast.error(t("settings.updateFailed"), {
+          description: extractErrorMessage(error) || undefined,
+          closeButton: true,
+        });
+
+        // Preserve a recovery path when the updater is unavailable on this platform.
+        try {
+          await settingsApi.openExternal(updateInfo.releaseUrl);
+        } catch (openError) {
+          console.error("[AboutSection] Open release page failed", openError);
+        }
       } finally {
+        unlistenProgress?.();
         setIsDownloading(false);
+        setDownloadPercent(null);
       }
       return;
     }
@@ -492,7 +541,14 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         closeButton: true,
       });
     }
-  }, [checkUpdate, hasUpdate, resetDismiss, t, updateInfo?.releaseUrl]);
+  }, [
+    checkUpdate,
+    hasUpdate,
+    isPortable,
+    resetDismiss,
+    t,
+    updateInfo?.releaseUrl,
+  ]);
 
   const handleCopyInstallCommands = useCallback(async () => {
     try {
@@ -945,7 +1001,9 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               {isDownloading ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  {t("settings.updating")}
+                  {downloadPercent === null
+                    ? t("settings.updating")
+                    : `${t("settings.updating")} ${downloadPercent}%`}
                 </>
               ) : hasUpdate ? (
                 <>
@@ -984,6 +1042,14 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               <p className="text-muted-foreground line-clamp-3 leading-relaxed">
                 {updateInfo.notes}
               </p>
+            )}
+            {isDownloading && downloadPercent !== null && (
+              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-primary/15">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-200"
+                  style={{ width: `${downloadPercent}%` }}
+                />
+              </div>
             )}
           </motion.div>
         )}

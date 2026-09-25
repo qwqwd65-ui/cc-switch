@@ -1,8 +1,8 @@
 import { getVersion } from "@tauri-apps/api/app";
 
 const RELEASES_API_URL =
-  "https://api.github.com/repos/kongkongyo/cc-switch/releases?per_page=10";
-const RELEASES_PAGE_URL = "https://github.com/kongkongyo/cc-switch/releases";
+  "https://api.github.com/repos/qwqwd65-ui/cc-switch/releases?per_page=10";
+const RELEASES_PAGE_URL = "https://github.com/qwqwd65-ui/cc-switch/releases";
 
 export type UpdateChannel = "stable" | "beta";
 
@@ -103,6 +103,7 @@ function compareVersion(a: string, b: string): number {
 
 async function fetchLatestRelease(
   timeout: number,
+  channel: UpdateChannel,
 ): Promise<GitHubRelease | null> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeout);
@@ -122,7 +123,12 @@ async function fetchLatestRelease(
 
     const releases = (await response.json()) as GitHubRelease[];
     return (
-      releases.find((release) => !release.draft && release.tag_name) ?? null
+      releases.find(
+        (release) =>
+          !release.draft &&
+          release.tag_name &&
+          (channel === "beta" || !release.prerelease),
+      ) ?? null
     );
   } finally {
     window.clearTimeout(timer);
@@ -143,7 +149,10 @@ export async function checkForUpdate(
   { status: "up-to-date" } | { status: "available"; info: UpdateInfo }
 > {
   const currentVersion = await getCurrentVersion();
-  const release = await fetchLatestRelease(opts.timeout ?? 30000);
+  const release = await fetchLatestRelease(
+    opts.timeout ?? 30000,
+    opts.channel ?? "stable",
+  );
 
   if (!release?.tag_name) {
     return { status: "up-to-date" };

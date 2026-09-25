@@ -60,9 +60,9 @@
       }
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM4MDI4QzlBNTczOTI4RTMKUldUaktEbFhtb3dDeUM5US9kT0FmdGR5Ti9vQzcwa2dTMlpibDVDUmQ2M0VGTzVOWnd0SGpFVlEK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhCRTVERjhCNDdDODI0MEUKUldRT0pNaEhpOS9saXpvZmI4Q0xzWFpiV21ZNVc5YUxPMHNlQ1pkL0JFN3d1WlVER05rRFNJcW8K",
       "endpoints": [
-        "https://github.com/kongkongyo/cc-switch/releases/latest/download/latest.json"
+        "https://github.com/qwqwd65-ui/cc-switch/releases/latest/download/latest.json"
       ]
     }
   }
