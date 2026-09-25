@@ -315,11 +315,9 @@ describe("App integration with MSW", () => {
 
     expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
     expect(screen.getByTestId("settings-page")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "common.back" }),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("common.back")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "common.back" }));
+    fireEvent.click(screen.getByLabelText("common.back"));
 
     expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
     expect(screen.getByTestId("provider-list")).toBeInTheDocument();
