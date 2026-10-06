@@ -13,6 +13,8 @@ ManifestDPIAwareness PerMonitorV2
   SetCompressor /SOLID "{{compression}}"
 !endif
 
+; Based on Tauri CLI 2.11.5 installer.nsi. Keep local changes small and
+; re-diff against that tag whenever the CLI is upgraded.
 ; Keep above !include to stay ahead of any plugin command
 ; see https://github.com/tauri-apps/tauri/pull/15422#discussion_r3289239624
 {{#if signed_plugins_path}}
@@ -255,6 +257,14 @@ Function PageReinstall
     !endif
     !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(choowHowToInstall)"
   ${Else}
+    Abort
+  ${EndIf}
+
+  ; A normal NSIS upgrade must not uninstall the old executable in this page.
+  ; The rollback capture hook runs later in Section Install, before File copies.
+  ; This also removes the misleading uninstall choice for supported upgrades.
+  ${If} $WixMode <> 1
+  ${AndIf} $R0 = 1
     Abort
   ${EndIf}
 
@@ -635,14 +645,27 @@ Section WebView2
   ${EndIf}
 SectionEnd
 
+Function RequireAppStoppedForRollback
+  retry:
+    nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
+    Pop $R0
+    ${If} $R0 = 0
+      IfSilent abort_running 0
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close ${PRODUCTNAME} from its system tray, then retry the installation. This keeps its settings consistent for rollback." IDRETRY retry
+      abort_running:
+        Abort "${PRODUCTNAME} must be closed before installing this version."
+    ${EndIf}
+FunctionEnd
+
 Section Install
   SetOutPath $INSTDIR
+
+  ; Never force-kill an app whose proxy/Live cleanup has not completed.
+  Call RequireAppStoppedForRollback
 
   !ifmacrodef NSIS_HOOK_PREINSTALL
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
-
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"

@@ -11,5 +11,13 @@
         "minHeight": 600
       }
     ]
+  },
+  "bundle": {
+    "windows": {
+      "allowDowngrades": true,
+      "nsis": {
+        "template": "nsis/installer.nsi"
+      }
+    }
   }
 }
