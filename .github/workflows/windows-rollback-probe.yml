@@ -74,6 +74,19 @@ jobs:
           if (Test-Path -LiteralPath $bundleDir) {
             Remove-Item -LiteralPath $bundleDir -Recurse -Force
           }
+          # Match release stamping, not just the NSIS display-version override.
+          # The helper will cross-check Rust/PE and uninstall registry versions.
+          $candidateVersion = '3.20.4-fork.4-probe.1'
+          $cargoPath = Join-Path $workspaceRoot 'src-tauri/Cargo.toml'
+          $cargo = [IO.File]::ReadAllText($cargoPath)
+          $cargo = [regex]::new('(?m)^version = "[^"]+"').Replace($cargo, "version = `"$candidateVersion`"", 1)
+          [IO.File]::WriteAllText($cargoPath, $cargo, [Text.UTF8Encoding]::new($false))
+          foreach ($metadataPath in @('package.json', 'src-tauri/tauri.conf.json')) {
+            $path = Join-Path $workspaceRoot $metadataPath
+            $metadata = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            $metadata.version = $candidateVersion
+            [IO.File]::WriteAllText($path, ($metadata | ConvertTo-Json -Depth 32), [Text.UTF8Encoding]::new($false))
+          }
           pnpm tauri --version
           pnpm tauri build --bundles nsis --config src-tauri/tauri.rollback-probe.conf.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -89,9 +89,40 @@ namespace RollbackProbe {
     }
   }
 }
+
 '@
     }
     return [RollbackProbe.Windows]::Read($ProcessId)
+}
+
+function Get-ExecutableByteDifferences([string]$Expected, [string]$Actual) {
+    # C# is compiled only on GA; report offsets/bytes, not executable contents.
+    if (-not ('RollbackProbe.BinaryDiff' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Collections.Generic;
+namespace RollbackProbe {
+  public static class BinaryDiff {
+    public static string[] Read(string expectedPath, string actualPath) {
+      var expected = File.ReadAllBytes(expectedPath);
+      var actual = File.ReadAllBytes(actualPath);
+      var lines = new List<string>();
+      long count = Math.Abs((long)expected.Length - actual.Length);
+      for (int i = 0; i < Math.Min(expected.Length, actual.Length); i++) {
+        if (expected[i] != actual[i]) {
+          count++;
+          if (lines.Count < 24) lines.Add(i.ToString("X8") + ": " + expected[i].ToString("X2") + " -> " + actual[i].ToString("X2"));
+        }
+      }
+      lines.Insert(0, "Differing bytes: " + count);
+      return lines.ToArray();
+    }
+  }
+}
+'@
+    }
+    return [RollbackProbe.BinaryDiff]::Read((Resolve-Path -LiteralPath $Expected).Path, (Resolve-Path -LiteralPath $Actual).Path)
 }
 
 function Assert-NoLaunch([string]$Stage) {
@@ -158,6 +189,7 @@ function Assert-Installed([string]$Version, [string]$Digest, [string]$Stage) {
             sourcePeProductVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path -LiteralPath $CandidateBinary).Path).ProductVersion
             installedBytes = (Get-Item -LiteralPath $exe).Length
             sourceBytes = (Get-Item -LiteralPath $CandidateBinary).Length
+            differences = @(Get-ExecutableByteDifferences $CandidateBinary $exe)
         }
         $report.Add($mismatch)
         Save-Report
