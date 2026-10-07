@@ -1,5 +1,11 @@
 {
+  "version": "3.20.4-fork.4-probe.1",
   "bundle": {
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/rollback-probe-hooks.nsh"
+      }
+    }
   }
 }
