@@ -185,6 +185,29 @@ impl Catalog {
         Ok(())
     }
 
+    /// Make the sealed candidate recoverable after helper/installer death.
+    /// It stays a transaction candidate, never a second selectable point.
+    pub fn bind_captured_candidate(&mut self, point: Point) -> Result<(), ProtocolError> {
+        self.validate()?;
+        point.validate()?;
+        let journal = self.transaction.as_mut().ok_or(ProtocolError::Phase)?;
+        if journal.direction != Direction::Upgrade
+            || journal.phase != Phase::Quiescing
+            || journal.captured_candidate.is_some()
+            || point.id != journal.point_id
+            || point.transaction_id != journal.id
+            || point.source_version != journal.from
+            || point.installed_version != journal.to
+            || point.source != journal.source
+        {
+            return Err(ProtocolError::Invalid(
+                "candidate binding changed or was made outside capture".into(),
+            ));
+        }
+        journal.captured_candidate = Some(point);
+        Ok(())
+    }
+
     pub fn commit_upgrade(&mut self, point: Point) -> Result<(), ProtocolError> {
         self.validate()?;
         point.validate()?;
@@ -197,6 +220,10 @@ impl Catalog {
             || point.source_version != journal.from
             || point.installed_version != journal.to
             || point.source != journal.source
+            || journal
+                .captured_candidate
+                .as_ref()
+                .is_some_and(|captured| captured != &point)
         {
             return Err(ProtocolError::Invalid(
                 "snapshot is not bound to this upgrade".into(),

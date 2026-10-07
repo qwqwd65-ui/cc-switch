@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{Digest, ForkVersion, InstallSource, ProtocolError, FORMAT_VERSION};
+use crate::model::{Digest, ForkVersion, InstallSource, Point, ProtocolError, FORMAT_VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +40,8 @@ pub struct Journal {
     pub(crate) phase: Phase,
     #[serde(default)]
     pub(crate) rescue_database_sha256: Option<Digest>,
+    #[serde(default)]
+    pub(crate) captured_candidate: Option<Point>,
 }
 
 impl Journal {
@@ -60,6 +62,7 @@ impl Journal {
             source,
             phase: Phase::Preparing,
             rescue_database_sha256: None,
+            captured_candidate: None,
         }
     }
 
@@ -78,6 +81,9 @@ impl Journal {
     pub fn rescue_database_sha256(&self) -> Option<&Digest> {
         self.rescue_database_sha256.as_ref()
     }
+    pub fn captured_candidate(&self) -> Option<&Point> {
+        self.captured_candidate.as_ref()
+    }
 
     pub(crate) fn validate(&self) -> Result<(), ProtocolError> {
         if self.format_version != FORMAT_VERSION || self.id.is_nil() || self.point_id.is_nil() {
@@ -94,6 +100,28 @@ impl Journal {
         {
             return Err(ProtocolError::Invalid(
                 "journal direction does not match its versions or phase".into(),
+            ));
+        }
+        if let Some(candidate) = &self.captured_candidate {
+            candidate.validate()?;
+            if self.direction != Direction::Upgrade
+                || candidate.id != self.point_id
+                || candidate.transaction_id != self.id
+                || candidate.source_version != self.from
+                || candidate.installed_version != self.to
+                || candidate.source != self.source
+                || matches!(self.phase, Phase::Preparing | Phase::Prepared)
+            {
+                return Err(ProtocolError::Invalid(
+                    "captured candidate does not match its journal".into(),
+                ));
+            }
+        }
+        if self.rescue_database_sha256.is_some()
+            && matches!(self.phase, Phase::Preparing | Phase::Prepared)
+        {
+            return Err(ProtocolError::Invalid(
+                "emergency database was bound before quiescing".into(),
             ));
         }
         Ok(())

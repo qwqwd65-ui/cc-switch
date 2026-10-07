@@ -159,6 +159,7 @@ impl StoreLease {
             ));
         }
         self.write_private_file(&destination, &bytes)?;
+        catalog.bind_captured_candidate(point.clone())?;
         catalog.advance(Phase::Captured)?;
         self.save(&catalog)?;
         Ok(point)
@@ -334,12 +335,19 @@ mod tests {
         let captured = lease.load().unwrap().unwrap();
         assert!(captured.previous().is_none());
         assert_eq!(captured.journal().unwrap().phase(), Phase::Captured);
+        assert_eq!(
+            captured.journal().unwrap().captured_candidate(),
+            Some(&point)
+        );
         let manifest = lease.verify_snapshot(&point).unwrap();
         assert_eq!(manifest.database.source_path, source);
         assert_eq!(manifest.database.user_version, 19);
         let mut catalog = captured;
         catalog.advance(Phase::Installing).unwrap();
         catalog.advance(Phase::Verifying).unwrap();
+        let mut substituted = point.clone();
+        substituted.snapshot_digest = Digest::parse(&"0".repeat(64)).unwrap();
+        assert!(catalog.commit_upgrade(substituted).is_err());
         catalog.commit_upgrade(point.clone()).unwrap();
         lease.save(&catalog).unwrap();
         assert_eq!(lease.load().unwrap().unwrap().previous(), Some(&point));
