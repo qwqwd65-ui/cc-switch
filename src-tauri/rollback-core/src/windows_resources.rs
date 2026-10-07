@@ -770,4 +770,45 @@ mod tests {
         .unwrap();
         assert!(store.verify_resources(&original, &digest).is_err());
     }
+
+    #[test]
+    fn only_the_db_owned_skill_tree_is_captured_including_nested_contents() {
+        let temp = tempfile::tempdir().unwrap();
+        let managed = temp.path().join("managed-skill");
+        fs::create_dir(&managed).unwrap();
+        fs::create_dir(managed.join("references")).unwrap();
+        fs::write(managed.join("SKILL.md"), b"fixture instructions").unwrap();
+        fs::write(
+            managed.join("references").join("notes.md"),
+            b"fixture notes",
+        )
+        .unwrap();
+        fs::create_dir(temp.path().join("unmanaged-sibling")).unwrap();
+        fs::write(
+            temp.path().join("unmanaged-sibling").join("keep.md"),
+            b"user-owned",
+        )
+        .unwrap();
+        let mut store = lease(temp.path());
+        let (inventory, digest) = store
+            .capture_resources(
+                &[ResourceRequest {
+                    path: managed.clone(),
+                    role: ResourceRole::Skill,
+                    kind: ResourceKind::ManagedTree,
+                }],
+                CaptureSlot::Previous,
+            )
+            .unwrap();
+        assert_eq!(inventory.resources.len(), 4);
+        assert!(inventory
+            .resources
+            .iter()
+            .all(|resource| resource.path.starts_with(&managed)));
+        store.verify_resources(&inventory, &digest).unwrap();
+        assert_eq!(
+            fs::read(temp.path().join("unmanaged-sibling").join("keep.md")).unwrap(),
+            b"user-owned"
+        );
+    }
 }

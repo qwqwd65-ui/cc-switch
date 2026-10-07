@@ -471,4 +471,18 @@ mod tests {
         assert_eq!(fs::read(foreign.join("keep.txt")).unwrap(), b"unmanaged");
         assert_eq!(fs::read_dir(&foreign).unwrap().count(), 1);
     }
+
+    #[test]
+    fn network_devices_streams_and_ambiguous_names_are_rejected() {
+        for path in [
+            r"\\server\share\rollback",
+            r"C:\data\auth.json:secret",
+            r"C:\data\NUL.json",
+            r"C:\data\settings.json.",
+            r"C:\data\settings.json ",
+            r"C:\data\..\elsewhere",
+        ] {
+            assert!(validate_path_syntax(Path::new(path)).is_err(), "{path}");
+        }
+    }
 }

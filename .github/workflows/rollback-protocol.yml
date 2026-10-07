@@ -28,7 +28,21 @@ jobs:
       - name: Check independent protocol formatting
         run: cargo fmt --manifest-path src-tauri/rollback-core/Cargo.toml -- --check
       - name: Test single-previous-version and transaction contracts
-        run: cargo test --locked --manifest-path src-tauri/rollback-core/Cargo.toml
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Join-Path $env:RUNNER_TEMP 'rollback-protocol-test.log'
+          cargo test --locked --manifest-path src-tauri/rollback-core/Cargo.toml 2>&1 | Tee-Object -FilePath $log
+          $result = $LASTEXITCODE
+          if ($result -ne 0) {
+            $details = (Get-Content -LiteralPath $log -Tail 100) -join "`n"
+            if ($details.Length -gt 12000) { $details = $details.Substring($details.Length - 12000) }
+            $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Rollback protocol test details::$details"
+            throw "Rollback protocol checks exited with $result."
+          }
+          $summary = (Select-String -LiteralPath $log -SimpleMatch 'test result:' | ForEach-Object { $_.Line }) -join '; '
+          Write-Output "::notice title=Rollback protocol checks::$summary"
       - name: Verify actual historical production Setup signature
         shell: pwsh
         run: |
