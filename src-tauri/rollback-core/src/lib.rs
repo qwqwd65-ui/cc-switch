@@ -11,6 +11,8 @@ mod windows_database;
 #[cfg(windows)]
 mod windows_resources;
 #[cfg(windows)]
+mod windows_restore;
+#[cfg(windows)]
 mod windows_security;
 #[cfg(windows)]
 mod windows_snapshot;

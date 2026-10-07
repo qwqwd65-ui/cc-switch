@@ -34,6 +34,9 @@ pub struct DatabaseImage {
     pub bytes: u64,
     pub sha256: Digest,
     pub source_dacl: FileDacl,
+    pub source_readonly: bool,
+    pub source_main_sha256: Digest,
+    pub source_wal_sha256: Option<Digest>,
 }
 
 impl StoreLease {
@@ -45,11 +48,12 @@ impl StoreLease {
         source: &Path,
         slot: CaptureSlot,
     ) -> Result<DatabaseImage, StoreError> {
-        let catalog = self
+        let mut catalog = self
             .load()?
             .ok_or_else(|| invalid("capture has no persisted catalog"))?;
         let journal = catalog
             .journal()
+            .cloned()
             .ok_or_else(|| invalid("capture has no transaction"))?;
         if journal.phase() != Phase::Quiescing
             || (slot == CaptureSlot::Previous && journal.direction() != Direction::Upgrade)
@@ -78,6 +82,9 @@ impl StoreLease {
             bytes: image.bytes,
             sha256: image.sha256,
             source_dacl: image.source_dacl,
+            source_readonly: image.source_readonly,
+            source_main_sha256: image.source_main_sha256,
+            source_wal_sha256: image.source_wal_sha256,
         };
         let metadata = serde_json::to_vec_pretty(&image)?;
         let mut file = OpenOptions::new()
@@ -87,6 +94,13 @@ impl StoreLease {
         use std::io::Write;
         file.write_all(&metadata)?;
         file.sync_all()?;
+        if slot == CaptureSlot::Rescue {
+            catalog.bind_rescue_database(Digest::parse(&format!(
+                "{:x}",
+                Sha256::digest(&metadata)
+            ))?)?;
+            self.save(&catalog)?;
+        }
         cleanup.complete();
         Ok(image)
     }
@@ -116,7 +130,12 @@ impl StoreLease {
         Ok(())
     }
 
-    fn database_directory(&self, transaction: Uuid, point: Uuid, slot: CaptureSlot) -> PathBuf {
+    pub(crate) fn database_directory(
+        &self,
+        transaction: Uuid,
+        point: Uuid,
+        slot: CaptureSlot,
+    ) -> PathBuf {
         match slot {
             CaptureSlot::Previous => self
                 .root
@@ -158,21 +177,27 @@ struct CapturedDatabase {
     bytes: u64,
     sha256: Digest,
     source_dacl: FileDacl,
+    source_readonly: bool,
+    source_main_sha256: Digest,
+    source_wal_sha256: Option<Digest>,
 }
 
 fn capture_sqlite(source: &Path, destination: &Path) -> Result<CapturedDatabase, StoreError> {
-    let source_guard = lock_regular_file(source)?;
+    let mut source_guard = lock_regular_file(source)?;
     let source_dacl = FileDacl::capture(&source_guard)?;
+    let source_readonly = source_guard.metadata()?.permissions().readonly();
+    let source_main_sha256 = hash_reader(&mut source_guard)?;
     // A crashed writer can leave committed pages only in WAL. Do not copy just
     // the main DB, and do not use immutable=1 (which would ignore those pages).
     let mut wal_name = source.as_os_str().to_owned();
     wal_name.push("-wal");
     let wal_path = PathBuf::from(wal_name);
-    let _wal_guard = match lock_regular_file(&wal_path) {
+    let mut wal_guard = match lock_regular_file(&wal_path) {
         Ok(file) => Some(file),
         Err(StoreError::Io(error)) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
+    let source_wal_sha256 = wal_guard.as_mut().map(hash_reader).transpose()?;
     let source_db = open_read_only(source)?;
     let user_version = pragma_i64(&source_db, "user_version")?;
     let page_size = pragma_i64(&source_db, "page_size")?;
@@ -235,10 +260,13 @@ fn capture_sqlite(source: &Path, destination: &Path) -> Result<CapturedDatabase,
         bytes,
         sha256,
         source_dacl,
+        source_readonly,
+        source_main_sha256,
+        source_wal_sha256,
     })
 }
 
-fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
+pub(crate) fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
     let database = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -248,11 +276,11 @@ fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
     Ok(database)
 }
 
-fn pragma_i64(database: &Connection, name: &str) -> Result<i64, StoreError> {
+pub(crate) fn pragma_i64(database: &Connection, name: &str) -> Result<i64, StoreError> {
     Ok(database.pragma_query_value(None, name, |row| row.get(0))?)
 }
 
-fn check_integrity(database: &Connection) -> Result<(), StoreError> {
+pub(crate) fn check_integrity(database: &Connection) -> Result<(), StoreError> {
     let mut statement = database.prepare("PRAGMA integrity_check")?;
     let mut rows = statement.query([])?;
     let Some(row) = rows.next()? else {

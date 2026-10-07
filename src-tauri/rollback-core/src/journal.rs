@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{ForkVersion, InstallSource, ProtocolError, FORMAT_VERSION};
+use crate::model::{Digest, ForkVersion, InstallSource, ProtocolError, FORMAT_VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +38,8 @@ pub struct Journal {
     pub(crate) direction: Direction,
     pub(crate) source: InstallSource,
     pub(crate) phase: Phase,
+    #[serde(default)]
+    pub(crate) rescue_database_sha256: Option<Digest>,
 }
 
 impl Journal {
@@ -57,6 +59,7 @@ impl Journal {
             direction,
             source,
             phase: Phase::Preparing,
+            rescue_database_sha256: None,
         }
     }
 
@@ -71,6 +74,9 @@ impl Journal {
     }
     pub fn direction(&self) -> Direction {
         self.direction
+    }
+    pub fn rescue_database_sha256(&self) -> Option<&Digest> {
+        self.rescue_database_sha256.as_ref()
     }
 
     pub(crate) fn validate(&self) -> Result<(), ProtocolError> {

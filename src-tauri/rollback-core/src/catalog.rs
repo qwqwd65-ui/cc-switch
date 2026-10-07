@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{ForkVersion, InstallSource, Point, ProtocolError, FORMAT_VERSION};
+use crate::model::{Digest, ForkVersion, InstallSource, Point, ProtocolError, FORMAT_VERSION};
 use crate::{Direction, Journal, Phase};
 
 /// Serializable catalog, changed only by the installation coordinator while it
@@ -173,6 +173,16 @@ impl Catalog {
             .as_mut()
             .ok_or(ProtocolError::Phase)?
             .advance(next)
+    }
+
+    pub fn bind_rescue_database(&mut self, digest: Digest) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let journal = self.transaction.as_mut().ok_or(ProtocolError::Phase)?;
+        if journal.phase != Phase::Quiescing || journal.rescue_database_sha256.is_some() {
+            return Err(ProtocolError::Phase);
+        }
+        journal.rescue_database_sha256 = Some(digest);
+        Ok(())
     }
 
     pub fn commit_upgrade(&mut self, point: Point) -> Result<(), ProtocolError> {
