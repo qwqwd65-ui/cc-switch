@@ -169,12 +169,13 @@ impl StoreLease {
             .open(directory.join("inventory.json"))?;
         output.write_all(&bytes)?;
         output.sync_all()?;
+        let inventory = capture.inventory;
         if slot == CaptureSlot::Rescue {
             catalog.bind_rescue_resources(digest.clone())?;
             self.save(&catalog)?;
         }
         cleanup.completed = true;
-        Ok((capture.inventory, digest))
+        Ok((inventory, digest))
     }
 
     pub fn verify_resources(
