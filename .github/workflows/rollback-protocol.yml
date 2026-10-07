@@ -1,0 +1,31 @@
+name: Rollback Protocol Checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/windows-single-version-rollback]
+    paths:
+      - src-tauri/rollback-core/**
+      - .github/workflows/rollback-protocol.yml
+
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/rollback-core/target
+          key: windows-rollback-protocol-${{ hashFiles('src-tauri/rollback-core/Cargo.lock') }}
+      - name: Check independent protocol formatting
+        run: cargo fmt --manifest-path src-tauri/rollback-core/Cargo.toml -- --check
+      - name: Test single-previous-version and transaction contracts
+        run: cargo test --locked --manifest-path src-tauri/rollback-core/Cargo.toml

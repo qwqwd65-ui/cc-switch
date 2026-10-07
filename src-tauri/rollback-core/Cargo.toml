@@ -1,0 +1,15 @@
+[package]
+name = "cc-switch-rollback-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+# Shared by the GUI coordinator and the independent helper. This crate must
+# never depend on Tauri or initialize/migrate the application's database.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }

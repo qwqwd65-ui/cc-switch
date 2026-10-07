@@ -4,6 +4,20 @@ on:
   workflow_dispatch:
   push:
     branches: [feat/windows-single-version-rollback]
+    paths:
+      - .github/workflows/windows-rollback-probe.yml
+      - src-tauri/nsis/**
+      - src-tauri/tauri*.json
+      - src-tauri/src/**
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src/**
+      - package.json
+      - pnpm-lock.yaml
+      - vite.config.*
+      - scripts/check-nsis-order.mjs
+      - scripts/probe-windows-installers.ps1
+      - scripts/check-powershell-syntax.ps1
 
 permissions:
   contents: read

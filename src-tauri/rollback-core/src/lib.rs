@@ -1,0 +1,12 @@
+//! Windows single-previous-version rollback protocol, independent of the GUI.
+//! Filesystem capture and installer execution are separate from this catalog.
+
+mod catalog;
+mod journal;
+mod model;
+mod ticket;
+
+pub use catalog::Catalog;
+pub use journal::{Direction, Journal, Phase};
+pub use model::{Digest, ForkVersion, InstallSource, Point, ProtocolError};
+pub use ticket::{PreparedSelection, TicketGate};

@@ -42,6 +42,58 @@ function Save-Report {
     $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'installer-results.json') -Encoding utf8
 }
 
+function Write-ProbeAnnotation([string]$Level, [string]$Title, [string]$Message) {
+    $escaped = $Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    Write-Output "::${Level} title=${Title}::$escaped"
+}
+
+function Get-InstallerWindowState([int]$ProcessId) {
+    # Compiled and invoked only on the isolated GA runner. This reads window
+    # labels; it does not click buttons or dismiss an installer error.
+    if (-not ('RollbackProbe.Windows' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace RollbackProbe {
+  public static class Windows {
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr param);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc proc, IntPtr param);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr param);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int max);
+    private static string Label(IntPtr hwnd) {
+      var text = new StringBuilder(2048);
+      var cls = new StringBuilder(128);
+      GetWindowText(hwnd, text, text.Capacity);
+      GetClassName(hwnd, cls, cls.Capacity);
+      return cls.ToString() + ": " + text.ToString();
+    }
+    public static string[] Read(int processId) {
+      var labels = new List<string>();
+      EnumWindows((hwnd, param) => {
+        uint pid;
+        GetWindowThreadProcessId(hwnd, out pid);
+        if (pid == (uint)processId) {
+          labels.Add(Label(hwnd));
+          EnumChildWindows(hwnd, (child, unused) => {
+            labels.Add(Label(child));
+            return true;
+          }, IntPtr.Zero);
+        }
+        return true;
+      }, IntPtr.Zero);
+      return labels.ToArray();
+    }
+  }
+}
+'@
+    }
+    return [RollbackProbe.Windows]::Read($ProcessId)
+}
+
 function Assert-NoLaunch([string]$Stage) {
     # Give the trace provider time to deliver short-lived process events too.
     Start-Sleep -Seconds 2
@@ -60,9 +112,24 @@ function Run-Setup([string]$Setup, [string]$Mode, [string]$Stage, [bool]$ExpectR
     $info.Arguments = "$Mode /NS /D=$installDir"
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
+    Write-ProbeAnnotation 'notice' 'Installer stage' $Stage
     $process = [Diagnostics.Process]::Start($info)
     if (-not $process.WaitForExit(180000)) {
+        $registryState = if (Test-Path -LiteralPath $uninstallKey) {
+            $entry = Get-ItemProperty -LiteralPath $uninstallKey
+            [ordered]@{ version = $entry.DisplayVersion; path = $entry.InstallLocation }
+        } else { $null }
+        $timeoutState = [ordered]@{
+            stage = $Stage; mainWindowTitle = $process.MainWindowTitle
+            controls = @(Get-InstallerWindowState $process.Id)
+            installed = $registryState
+            executableSha256 = if (Test-Path -LiteralPath $exe) { (Get-FileHash -LiteralPath $exe).Hash } else { $null }
+        }
+        $report.Add($timeoutState)
+        Save-Report
+        Write-ProbeAnnotation 'error' 'Installer timeout state' ($timeoutState | ConvertTo-Json -Depth 6 -Compress)
         $process.Kill($true)
+        $process.Dispose()
         throw "$Stage installer timed out."
     }
     $exitCode = $process.ExitCode
@@ -95,7 +162,7 @@ function Assert-Installed([string]$Version, [string]$Digest, [string]$Stage) {
 
 try {
     $watcher = Register-CimIndicationEvent -Query "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'cc-switch.exe'" -SourceIdentifier $eventName
-    Invoke-WebRequest -Uri $oldUrl -OutFile $oldSetup
+    Invoke-WebRequest -Uri $oldUrl -OutFile $oldSetup -TimeoutSec 120
     if ((Get-FileHash -LiteralPath $oldSetup -Algorithm SHA256).Hash.ToLowerInvariant() -ne $oldDigest) {
         throw 'Historical production Setup differs from the pinned GitHub asset digest.'
     }
@@ -198,6 +265,7 @@ try {
 } catch {
     $report.Add([ordered]@{ stage = 'failure'; message = $_.Exception.Message; stack = $_.ScriptStackTrace })
     Save-Report
+    Write-ProbeAnnotation 'notice' 'Completed installer evidence' ($report | ConvertTo-Json -Depth 8 -Compress)
     $annotation = ($_.Exception.Message + "`n" + $_.ScriptStackTrace).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
     Write-Output "::error title=Windows installer probe::$annotation"
     throw
