@@ -31,6 +31,10 @@ impl ForkVersion {
     pub fn is_newer_than(&self, other: &Self) -> bool {
         self.0 > other.0
     }
+
+    pub fn as_string(&self) -> String {
+        self.0.to_string()
+    }
 }
 
 impl TryFrom<String> for ForkVersion {

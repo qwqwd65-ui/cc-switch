@@ -29,3 +29,16 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/rollback-core/Cargo.toml -- --check
       - name: Test single-previous-version and transaction contracts
         run: cargo test --locked --manifest-path src-tauri/rollback-core/Cargo.toml
+      - name: Verify actual historical production Setup signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'rollback-signature-contract'
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          $release = 'https://github.com/qwqwd65-ui/cc-switch/releases/download/v3.20.4-fork.3'
+          $setup = Join-Path $root 'historical-setup.exe'
+          $manifest = Join-Path $root 'latest.json'
+          Invoke-WebRequest -Uri "$release/CC-Switch-v3.20.4-fork.3-Windows-Setup.exe" -OutFile $setup -TimeoutSec 120
+          Invoke-WebRequest -Uri "$release/latest.json" -OutFile $manifest -TimeoutSec 60
+          cargo run --locked --manifest-path src-tauri/rollback-core/Cargo.toml --example verify-historical-setup -- $setup $manifest src-tauri/tauri.conf.json
+          if ($LASTEXITCODE -ne 0) { throw 'Historical Setup verification contract failed.' }
