@@ -47,6 +47,16 @@ jobs:
       - name: Build unsigned NSIS probe
         shell: pwsh
         run: |
+          # Cargo cache also contains older bundles. Do not mistake a stale
+          # Setup for the candidate or include both versions in the artifact.
+          $workspaceRoot = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $bundleDir = [IO.Path]::GetFullPath((Join-Path $workspaceRoot 'src-tauri/target/release/bundle/nsis'))
+          if (-not $bundleDir.StartsWith($workspaceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Bundle cleanup path escaped the checked-out workspace'
+          }
+          if (Test-Path -LiteralPath $bundleDir) {
+            Remove-Item -LiteralPath $bundleDir -Recurse -Force
+          }
           pnpm tauri --version
           pnpm tauri build --bundles nsis --config src-tauri/tauri.rollback-probe.conf.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -61,8 +71,18 @@ jobs:
         shell: pwsh
         run: |
           $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe)
-          if ($setup.Count -ne 1) { throw 'Expected exactly one candidate Setup' }
-          ./scripts/probe-windows-installers.ps1 -CandidateSetup $setup[0].FullName -CandidateBinary src-tauri/target/release/cc-switch.exe -EvidenceDirectory artifacts/rollback-installer-probe
+          if ($setup.Count -ne 1) {
+            $names = ($setup.Name -join ', ')
+            Write-Output "::error title=Candidate Setup selection::Expected one fresh Setup; found $($setup.Count): $names"
+            throw 'Expected exactly one candidate Setup'
+          }
+          try {
+            ./scripts/probe-windows-installers.ps1 -CandidateSetup $setup[0].FullName -CandidateBinary src-tauri/target/release/cc-switch.exe -EvidenceDirectory artifacts/rollback-installer-probe
+          } catch {
+            $message = ($_.Exception.Message + "`n" + $_.ScriptStackTrace).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Installer probe entry::$message"
+            throw
+          }
       - name: Archive installer evidence
         if: always()
         uses: actions/upload-artifact@v4

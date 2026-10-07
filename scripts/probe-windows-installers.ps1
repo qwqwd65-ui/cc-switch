@@ -198,6 +198,8 @@ try {
 } catch {
     $report.Add([ordered]@{ stage = 'failure'; message = $_.Exception.Message; stack = $_.ScriptStackTrace })
     Save-Report
+    $annotation = ($_.Exception.Message + "`n" + $_.ScriptStackTrace).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    Write-Output "::error title=Windows installer probe::$annotation"
     throw
 } finally {
     if ($blockedAcl -and $originalSddl -and (Test-Path -LiteralPath $exe)) {
