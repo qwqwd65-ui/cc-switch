@@ -63,6 +63,10 @@ impl Digest {
     pub fn parse(value: &str) -> Result<Self, ProtocolError> {
         value.to_owned().try_into()
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl TryFrom<String> for Digest {

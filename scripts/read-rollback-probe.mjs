@@ -1,8 +1,9 @@
 // Public, read-only Actions diagnostics. No token or credential helper access.
 const api = "https://api.github.com/repos/qwqwd65-ui/cc-switch";
 const requestedRun = process.argv[2];
-if (requestedRun && !/^\d+$/.test(requestedRun)) {
-  throw new Error("Usage: node scripts/read-rollback-probe.mjs [RUN_ID]");
+const protocol = requestedRun === "--protocol";
+if (requestedRun && !protocol && !/^\d+$/.test(requestedRun)) {
+  throw new Error("Usage: node scripts/read-rollback-probe.mjs [RUN_ID|--protocol]");
 }
 async function get(path) {
   const response = await fetch(`${api}/${path}`, {
@@ -12,9 +13,9 @@ async function get(path) {
   if (!response.ok) throw new Error(`Public GitHub API HTTP ${response.status}`);
   return response.json();
 }
-const run = requestedRun
+const run = requestedRun && !protocol
   ? await get(`actions/runs/${requestedRun}`)
-  : (await get("actions/workflows/windows-rollback-probe.yml/runs?per_page=1"))
+  : (await get(`actions/workflows/${protocol ? "rollback-protocol" : "windows-rollback-probe"}.yml/runs?per_page=1`))
       .workflow_runs[0];
 if (!run) throw new Error("No installer probe run found");
 const jobs = (await get(`actions/runs/${run.id}/jobs`)).jobs;

@@ -2,6 +2,9 @@
 !macro NSIS_HOOK_PREINSTALL
   Push $R8
   Push $R9
+  ; NSIS error flags are sticky. Earlier optional registry lookups can set
+  ; them; a successful FileOpen does not clear an unrelated old error.
+  ClearErrors
   FileOpen $R8 "$INSTDIR\rollback-probe-preinstall.txt" w
   IfErrors probe_hook_failed
   ReadRegStr $R9 SHCTX "${UNINSTKEY}" "DisplayVersion"
@@ -16,7 +19,9 @@
     FileWriteUTF16LE $R8 "Uninstaller=present$\r$\n"
     Goto +2
     FileWriteUTF16LE $R8 "Uninstaller=absent$\r$\n"
+  ClearErrors
   FileClose $R8
+  IfErrors probe_hook_failed
   Goto probe_hook_done
   probe_hook_failed:
     SetErrorLevel 2

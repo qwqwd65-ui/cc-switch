@@ -260,11 +260,12 @@ Function PageReinstall
     Abort
   ${EndIf}
 
-  ; A normal NSIS upgrade must not uninstall the old executable in this page.
+  ; A normal NSIS upgrade or same-version reinstall must not uninstall the old
+  ; executable in this page. Reinstalling must also preserve the existing point.
   ; The rollback capture hook runs later in Section Install, before File copies.
   ; This also removes the misleading uninstall choice for supported upgrades.
   ${If} $WixMode <> 1
-  ${AndIf} $R0 = 1
+  ${AndIf} $R0 >= 0
     Abort
   ${EndIf}
 

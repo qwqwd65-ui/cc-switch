@@ -2,7 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-use std::os::windows::io::{FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::ptr;
 use uuid::Uuid;
@@ -17,8 +17,9 @@ use windows_sys::Win32::{
         PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
     },
     Storage::FileSystem::{
-        MoveFileExW, FILE_ATTRIBUTE_REPARSE_POINT, MOVEFILE_REPLACE_EXISTING,
-        MOVEFILE_WRITE_THROUGH,
+        GetDriveTypeW, GetFileInformationByHandle, GetVolumeInformationW, MoveFileExW,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     },
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
@@ -35,6 +36,8 @@ pub enum StoreError {
     Io(#[from] io::Error),
     #[error("Rollback storage JSON failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Rollback SQLite operation failed: {0}")]
+    Database(#[from] rusqlite::Error),
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
 }
@@ -52,10 +55,10 @@ impl PrivateRoot {
         Self::create_at(local.join("com.ccswitch.desktop").join("rollback"))
     }
 
-    fn create_at(path: PathBuf) -> Result<Self, StoreError> {
-        validate_local_path(&path)?;
+    pub(crate) fn create_at(path: PathBuf) -> Result<Self, StoreError> {
+        validate_ntfs_path(&path)?;
         fs::create_dir_all(&path)?;
-        validate_local_path(&path)?;
+        validate_ntfs_path(&path)?;
         if !fs::symlink_metadata(&path)?.is_dir() {
             return Err(invalid("rollback root is not a directory"));
         }
@@ -101,7 +104,7 @@ impl PrivateRoot {
 
 /// An OS handle, not a PID file: a crashed process automatically releases it.
 pub struct StoreLease {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
     _lock: File,
 }
 
@@ -173,14 +176,14 @@ impl Drop for TemporaryCatalog {
     }
 }
 
-fn invalid(message: &str) -> StoreError {
+pub(crate) fn invalid(message: &str) -> StoreError {
     ProtocolError::Invalid(message.into()).into()
 }
-fn wide_path(path: &Path) -> Vec<u16> {
+pub(crate) fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
-fn validate_local_path(path: &Path) -> Result<(), StoreError> {
+pub(crate) fn validate_local_path(path: &Path) -> Result<(), StoreError> {
     let disk = matches!(path.components().next(), Some(Component::Prefix(prefix))
         if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)));
     if !path.is_absolute()
@@ -207,7 +210,70 @@ fn validate_local_path(path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn validate_regular_file_if_present(path: &Path) -> Result<(), StoreError> {
+/// First release only supports local NTFS volumes. A mapped drive can have a
+/// disk-shaped prefix too, so syntax validation alone does not prove locality.
+pub(crate) fn validate_ntfs_path(path: &Path) -> Result<(), StoreError> {
+    validate_local_path(path)?;
+    let root: PathBuf = path.components().take(2).collect();
+    let root = wide_path(&root);
+    // SAFETY: the drive root is an absolute NUL-terminated path.
+    let drive = unsafe { GetDriveTypeW(root.as_ptr()) };
+    if drive != 3 {
+        return Err(invalid("rollback requires a fixed local disk"));
+    }
+    let mut filesystem = [0u16; 32];
+    // SAFETY: only the filesystem output is requested; its buffer is sized.
+    if unsafe {
+        GetVolumeInformationW(
+            root.as_ptr(),
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            filesystem.as_mut_ptr(),
+            filesystem.len() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    let length = filesystem.iter().position(|unit| *unit == 0).unwrap_or(32);
+    if String::from_utf16_lossy(&filesystem[..length]) != "NTFS" {
+        return Err(invalid(
+            "rollback requires NTFS until other filesystems are tested",
+        ));
+    }
+    Ok(())
+}
+
+/// Deny both writes and deletion for the lifetime of this handle. If another
+/// writer is already open Windows rejects the capture instead of racing it.
+pub(crate) fn lock_regular_file(path: &Path) -> Result<File, StoreError> {
+    validate_ntfs_path(path)?;
+    validate_regular_file_if_present(path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: file owns a live handle and information is a writable structure.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut information) } == 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || information.nNumberOfLinks != 1
+        || !file.metadata()?.is_file()
+    {
+        return Err(invalid(
+            "capture requires an ordinary file with a single hard link",
+        ));
+    }
+    Ok(file)
+}
+
+pub(crate) fn validate_regular_file_if_present(path: &Path) -> Result<(), StoreError> {
     match fs::symlink_metadata(path) {
         Ok(metadata)
             if !metadata.is_file()
