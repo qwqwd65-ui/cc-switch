@@ -9,6 +9,8 @@ mod ticket;
 #[cfg(windows)]
 mod windows_database;
 #[cfg(windows)]
+mod windows_ownership;
+#[cfg(windows)]
 mod windows_resource_restore;
 #[cfg(windows)]
 mod windows_resources;
@@ -28,6 +30,8 @@ pub use package::{FixedReleaseSetup, PackageError, VerifiedSetup, UPDATER_PUBLIC
 pub use ticket::{PreparedSelection, TicketGate};
 #[cfg(windows)]
 pub use windows_database::{CaptureSlot, DatabaseImage};
+#[cfg(windows)]
+pub use windows_ownership::ManagedFileOutcome;
 #[cfg(windows)]
 pub use windows_resources::{
     ResourceInventory, ResourceKind, ResourceRequest, ResourceRole, ResourceState, SnapshotResource,

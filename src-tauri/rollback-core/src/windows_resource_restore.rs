@@ -7,6 +7,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 use windows_sys::Win32::Storage::FileSystem::{
     MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -16,8 +17,8 @@ use crate::windows_database::{hash_reader, require_free_space};
 use crate::windows_resources::normalized_path;
 use crate::windows_store::{invalid, lock_regular_file, validate_ntfs_path, wide_path};
 use crate::{
-    CaptureSlot, Digest, Direction, FileDacl, Journal, Phase, ResourceInventory, ResourceKind,
-    ResourceState, StoreError, StoreLease,
+    CaptureSlot, Catalog, Digest, Direction, FileDacl, Journal, Phase, Point, ResourceInventory,
+    ResourceKind, ResourceState, StoreError, StoreLease,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +47,7 @@ struct FileRestoreLedger {
     point_id: Uuid,
     previous_digest: Digest,
     rescue_digest: Digest,
+    ownership_digest: Digest,
     mode: Mode,
     index: usize,
     phase: FilePhase,
@@ -101,7 +103,7 @@ impl StoreLease {
             CaptureSlot::Rescue,
             rescue_digest,
         )?;
-        validate_file_plan(&previous, &rescue)?;
+        validate_file_plan(&previous, &rescue, &catalog, point)?;
         let desired = if mode == Mode::Previous {
             &previous
         } else {
@@ -121,6 +123,10 @@ impl StoreLease {
             point_id: journal.point_id(),
             previous_digest: manifest.resource_inventory_sha256.clone(),
             rescue_digest: rescue_digest.clone(),
+            ownership_digest: Digest::parse(&format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&catalog.managed_file_writes)?)
+            ))?,
             mode,
             index: 0,
             phase: FilePhase::Staging,
@@ -308,20 +314,18 @@ impl StoreLease {
                             }
                         }
                         ResourceState::Missing { .. } => {
-                            // Only undo a file this exact forward executor could
-                            // have created. Generic upgrade additions require the
-                            // application's write-ownership ledger instead.
-                            if mode != Mode::Rescue
-                                || !matches!(
-                                    previous.resources[ledger.index].state,
-                                    ResourceState::File { .. }
-                                )
-                            {
-                                return Err(invalid(
-                                    "missing-state deletion lacks restoration ownership",
-                                ));
+                            // Forward deletion was authorized by this point's
+                            // completed application write receipt during preflight.
+                            // Compensation can undo only this executor's own file.
+                            let owned_state = if mode == Mode::Previous {
+                                &rescue.resources[ledger.index].state
+                            } else {
+                                &previous.resources[ledger.index].state
+                            };
+                            if !matches!(owned_state, ResourceState::File { .. }) {
+                                return Err(invalid("missing-state deletion lacks file ownership"));
                             }
-                            verify_state(target, &previous.resources[ledger.index].state, true)?;
+                            verify_state(target, owned_state, true)?;
                             clear_readonly(target)?;
                             fs::remove_file(target)?;
                         }
@@ -377,6 +381,8 @@ impl StoreLease {
 fn validate_file_plan(
     previous: &ResourceInventory,
     rescue: &ResourceInventory,
+    catalog: &Catalog,
+    point: &Point,
 ) -> Result<(), StoreError> {
     if previous.resources.len() != rescue.resources.len() {
         return Err(invalid(
@@ -406,6 +412,13 @@ fn validate_file_plan(
         }
         if matches!(previous.state, ResourceState::Missing { .. })
             && matches!(rescue.state, ResourceState::File { .. })
+            && !crate::windows_ownership::owns_addition(
+                catalog,
+                point,
+                &previous.path,
+                previous.role,
+                &rescue.state,
+            )?
         {
             return Err(invalid(
                 "deleting a post-upgrade addition requires write-ownership evidence",
@@ -448,6 +461,7 @@ fn validate_ledger(
         || ledger.point_id != expected.point_id
         || ledger.previous_digest != expected.previous_digest
         || ledger.rescue_digest != expected.rescue_digest
+        || ledger.ownership_digest != expected.ownership_digest
         || ledger.mode != expected.mode
         || ledger.index > count
         || (ledger.phase == FilePhase::Complete) != (ledger.index == count)
@@ -529,6 +543,14 @@ mod tests {
     use crate::{Catalog, ForkVersion, InstallSource, PrivateRoot, ResourceRequest, ResourceRole};
 
     fn ready(temp: &Path, create_unowned_addition: bool) -> (StoreLease, Vec<PathBuf>) {
+        ready_with_writer(temp, create_unowned_addition, false)
+    }
+
+    fn ready_with_writer(
+        temp: &Path,
+        create_addition: bool,
+        owned_addition: bool,
+    ) -> (StoreLease, Vec<PathBuf>) {
         let install = temp.join("安装 路径");
         fs::create_dir(&install).unwrap();
         fs::write(install.join("cc-switch.exe"), b"MZ fixture").unwrap();
@@ -588,9 +610,26 @@ mod tests {
         clear_readonly(&paths[0]).unwrap();
         fs::write(&paths[0], b"new settings").unwrap();
         fs::remove_file(&paths[1]).unwrap();
-        if create_unowned_addition {
+        let receipt = if owned_addition {
+            Some(
+                lease
+                    .begin_managed_file_write(
+                        &paths[2],
+                        ResourceRole::Provider,
+                        outcome(b"external addition"),
+                    )
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        if create_addition {
             fs::write(&paths[2], b"external addition").unwrap();
         }
+        if let Some(receipt) = receipt {
+            lease.complete_managed_file_write(receipt).unwrap();
+        }
+        let mut catalog = lease.load().unwrap().unwrap();
         catalog.begin_rollback().unwrap();
         catalog.advance(Phase::Prepared).unwrap();
         catalog.advance(Phase::Quiescing).unwrap();
@@ -611,6 +650,25 @@ mod tests {
         catalog.advance(Phase::Failed).unwrap();
         catalog.advance(Phase::Recovering).unwrap();
         lease.save(&catalog).unwrap();
+    }
+
+    fn outcome(bytes: &[u8]) -> crate::ManagedFileOutcome {
+        crate::ManagedFileOutcome::File {
+            bytes: bytes.len() as u64,
+            sha256: Digest::parse(&format!("{:x}", Sha256::digest(bytes))).unwrap(),
+        }
+    }
+
+    fn idle_writer(temp: &Path) -> (StoreLease, Vec<PathBuf>) {
+        let (mut lease, paths) = ready(temp, false);
+        start_recovery(&mut lease);
+        let mut catalog = lease.load().unwrap().unwrap();
+        let id = catalog.journal().unwrap().id();
+        let version = catalog.current_version().clone();
+        catalog.confirm_recovered(&version).unwrap();
+        catalog.finish_recovery_cleanup(id).unwrap();
+        lease.save(&catalog).unwrap();
+        (lease, paths)
     }
 
     fn assert_old(paths: &[PathBuf]) {
@@ -835,6 +893,119 @@ mod tests {
         assert!(lease.restore_previous_resource_files().is_err());
         assert_eq!(fs::read(&paths[0]).unwrap(), b"new settings");
         assert_eq!(fs::read(&paths[1]).unwrap(), b"external after rescue");
+    }
+
+    #[test]
+    fn completed_point_scoped_receipt_allows_added_file_deletion_and_rescue_restores_it() {
+        for interrupted in [
+            FilePhase::Staging,
+            FilePhase::Staged,
+            FilePhase::Replacing,
+            FilePhase::Replaced,
+            FilePhase::Verifying,
+            FilePhase::Complete,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (mut lease, paths) = ready_with_writer(temp.path(), true, true);
+            assert!(lease
+                .restore_resource_files(Mode::Previous, |index, phase| {
+                    if (index == 2 && phase == interrupted) || phase == FilePhase::Complete {
+                        Err(invalid("simulated delete boundary"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err());
+            drop(lease);
+            let mut lease = PrivateRoot::create_at(temp.path().join("private"))
+                .unwrap()
+                .try_lease()
+                .unwrap();
+            lease.restore_previous_resource_files().unwrap();
+            assert_old(&paths);
+            start_recovery(&mut lease);
+            lease.restore_rescue_resource_files().unwrap();
+            assert_eq!(fs::read(&paths[0]).unwrap(), b"new settings");
+            assert!(!paths[1].exists());
+            assert_eq!(fs::read(&paths[2]).unwrap(), b"external addition");
+        }
+    }
+
+    #[test]
+    fn write_intent_blocks_installation_until_independent_result_verification() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut lease, paths) = idle_writer(temp.path());
+        assert!(lease
+            .begin_managed_file_write(&paths[2], ResourceRole::Skill, outcome(b"owned"))
+            .is_err());
+        let id = lease
+            .begin_managed_file_write(&paths[2], ResourceRole::Provider, outcome(b"owned"))
+            .unwrap();
+        assert!(lease.complete_managed_file_write(id).is_err());
+        let mut catalog = lease.load().unwrap().unwrap();
+        assert!(catalog.begin_rollback().is_err());
+        assert!(catalog
+            .begin_upgrade(
+                ForkVersion::parse("3.20.4-fork.5").unwrap(),
+                InstallSource::ManualSetup
+            )
+            .is_err());
+        fs::write(&paths[2], b"owned").unwrap();
+        assert!(lease.cancel_managed_file_write(id).is_err());
+        lease.complete_managed_file_write(id).unwrap();
+        assert!(lease.complete_managed_file_write(id).is_err());
+        fs::write(&paths[2], b"external").unwrap();
+        assert!(lease
+            .begin_managed_file_write(&paths[2], ResourceRole::Provider, outcome(b"replacement"))
+            .is_err());
+    }
+
+    #[test]
+    fn crashed_managed_writer_reconciles_only_exact_before_or_after_bytes() {
+        for result in [None, Some(b"owned".as_slice()), Some(b"partial".as_slice())] {
+            let temp = tempfile::tempdir().unwrap();
+            let (mut lease, paths) = idle_writer(temp.path());
+            lease
+                .begin_managed_file_write(&paths[2], ResourceRole::Provider, outcome(b"owned"))
+                .unwrap();
+            if let Some(bytes) = result {
+                fs::write(&paths[2], bytes).unwrap();
+            }
+            drop(lease);
+            let mut lease = PrivateRoot::create_at(temp.path().join("private"))
+                .unwrap()
+                .try_lease()
+                .unwrap();
+            if result == Some(b"partial".as_slice()) {
+                assert!(lease.reconcile_pending_managed_file_write().is_err());
+                assert!(lease.load().unwrap().unwrap().begin_rollback().is_err());
+            } else {
+                lease.reconcile_pending_managed_file_write().unwrap();
+                let mut catalog = lease.load().unwrap().unwrap();
+                assert_eq!(catalog.managed_file_writes.is_empty(), result.is_none());
+                catalog.begin_rollback().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn ownership_record_cannot_be_reused_for_a_different_point() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut lease, paths) = idle_writer(temp.path());
+        let id = lease
+            .begin_managed_file_write(&paths[2], ResourceRole::Provider, outcome(b"owned"))
+            .unwrap();
+        fs::write(&paths[2], b"owned").unwrap();
+        lease.complete_managed_file_write(id).unwrap();
+        let mut bytes: serde_json::Value =
+            serde_json::from_slice(&fs::read(lease.root.join("active.json")).unwrap()).unwrap();
+        bytes["managed_file_writes"][0]["point_id"] = serde_json::json!(Uuid::new_v4());
+        fs::write(
+            lease.root.join("active.json"),
+            serde_json::to_vec(&bytes).unwrap(),
+        )
+        .unwrap();
+        assert!(lease.load().is_err());
     }
 
     #[test]

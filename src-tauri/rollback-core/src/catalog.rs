@@ -15,6 +15,9 @@ pub struct Catalog {
     previous: Option<Point>,
     transaction: Option<Journal>,
     cleanup_pending: Option<Uuid>,
+    #[cfg(windows)]
+    #[serde(default)]
+    pub(crate) managed_file_writes: Vec<crate::windows_ownership::ManagedFileWrite>,
 }
 
 impl Catalog {
@@ -25,6 +28,8 @@ impl Catalog {
             previous: None,
             transaction: None,
             cleanup_pending: None,
+            #[cfg(windows)]
+            managed_file_writes: Vec::new(),
         }
     }
 
@@ -42,6 +47,11 @@ impl Catalog {
     }
 
     pub fn validate(&self) -> Result<(), ProtocolError> {
+        #[cfg(windows)]
+        crate::windows_ownership::validate_writes(
+            &self.managed_file_writes,
+            self.previous.as_ref(),
+        )?;
         if self.format_version != FORMAT_VERSION {
             return Err(ProtocolError::Invalid("unsupported catalog format".into()));
         }
@@ -119,6 +129,14 @@ impl Catalog {
 
     fn require_idle(&self) -> Result<(), ProtocolError> {
         self.validate()?;
+        #[cfg(windows)]
+        if self
+            .managed_file_writes
+            .iter()
+            .any(|write| write.pending.is_some())
+        {
+            return Err(ProtocolError::Busy);
+        }
         if self.transaction.is_some() || self.cleanup_pending.is_some() {
             return Err(ProtocolError::Busy);
         }
@@ -246,6 +264,8 @@ impl Catalog {
         self.cleanup_pending = self.previous.as_ref().map(|previous| previous.id);
         self.current_version = point.installed_version.clone();
         self.previous = Some(point);
+        #[cfg(windows)]
+        self.managed_file_writes.clear();
         Ok(())
     }
 
@@ -261,6 +281,8 @@ impl Catalog {
             .unwrap()
             .advance(Phase::Committed)?;
         self.cleanup_pending = self.previous.take().map(|previous| previous.id);
+        #[cfg(windows)]
+        self.managed_file_writes.clear();
         self.current_version = restored_version;
         Ok(())
     }
