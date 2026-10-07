@@ -95,7 +95,7 @@ namespace RollbackProbe {
     return [RollbackProbe.Windows]::Read($ProcessId)
 }
 
-function Get-ExecutableByteDifferences([string]$Expected, [string]$Actual) {
+function Initialize-BinaryProbe {
     # C# is compiled only on GA; report offsets/bytes, not executable contents.
     if (-not ('RollbackProbe.BinaryDiff' -as [type])) {
         Add-Type -TypeDefinition @'
@@ -118,10 +118,34 @@ namespace RollbackProbe {
       lines.Insert(0, "Differing bytes: " + count);
       return lines.ToArray();
     }
+    public static void WriteNsisReference(string sourcePath, string destinationPath) {
+      var bytes = File.ReadAllBytes(sourcePath);
+      var marker = System.Text.Encoding.ASCII.GetBytes("__TAURI_BUNDLE_TYPE_VAR_UNK");
+      int found = -1;
+      int count = 0;
+      for (int i = 0; i <= bytes.Length - marker.Length; i++) {
+        bool matches = true;
+        for (int j = 0; j < marker.Length; j++) {
+          if (bytes[i + j] != marker[j]) { matches = false; break; }
+        }
+        if (matches) { count++; found = i; }
+      }
+      if (count != 1) throw new InvalidDataException("Expected exactly one Tauri UNK bundle marker; found " + count);
+      var nsis = System.Text.Encoding.ASCII.GetBytes("NSS");
+      Array.Copy(nsis, 0, bytes, found + marker.Length - 3, 3);
+      using (var output = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write)) {
+        output.Write(bytes, 0, bytes.Length);
+        output.Flush(true);
+      }
+    }
   }
 }
 '@
     }
+}
+
+function Get-ExecutableByteDifferences([string]$Expected, [string]$Actual) {
+    Initialize-BinaryProbe
     return [RollbackProbe.BinaryDiff]::Read((Resolve-Path -LiteralPath $Expected).Path, (Resolve-Path -LiteralPath $Actual).Path)
 }
 
@@ -182,6 +206,7 @@ function Assert-Installed([string]$Version, [string]$Digest, [string]$Stage) {
     if ((Test-Path $machineKey)) { throw "${Stage}: installation changed user scope." }
     $actualDigest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualDigest -ne $Digest) {
+        $reference = if ($Digest -eq $candidateDigest) { $candidateReference } else { $oldReference }
         $mismatch = [ordered]@{
             stage = $Stage; expectedSha256 = $Digest; actualSha256 = $actualDigest
             installedVersion = $entry.DisplayVersion
@@ -189,7 +214,7 @@ function Assert-Installed([string]$Version, [string]$Digest, [string]$Stage) {
             sourcePeProductVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path -LiteralPath $CandidateBinary).Path).ProductVersion
             installedBytes = (Get-Item -LiteralPath $exe).Length
             sourceBytes = (Get-Item -LiteralPath $CandidateBinary).Length
-            differences = @(Get-ExecutableByteDifferences $CandidateBinary $exe)
+            differences = @(Get-ExecutableByteDifferences $reference $exe)
         }
         $report.Add($mismatch)
         Save-Report
@@ -210,10 +235,22 @@ try {
     if ((Get-FileHash -LiteralPath $oldSetup -Algorithm SHA256).Hash.ToLowerInvariant() -ne $oldDigest) {
         throw 'Historical production Setup differs from the pinned GitHub asset digest.'
     }
-    $candidateDigest = (Get-FileHash -LiteralPath $CandidateBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    # Locked Tauri CLI 2.11.5 stamps __TAURI_BUNDLE_TYPE_VAR_UNK to NSS before
+    # NSIS packaging, then restores the unsigned/unpatched source executable.
+    # See crates/tauri-bundler/src/bundle.rs at tag tauri-cli-v2.11.5.
+    # This unsigned probe reproduces only that exact three-byte substitution
+    # in a separate reference file, then still compares the ENTIRE SHA-256.
+    $sourceVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path -LiteralPath $CandidateBinary).Path).ProductVersion
+    if ($sourceVersion -ne $CandidateVersion) { throw 'Candidate PE version differs from the stamped probe version.' }
+    $candidateReference = Join-Path $testRoot 'candidate-nsis-reference.exe'
+    $oldReference = Join-Path $testRoot 'historical-nsis-reference.exe'
+    Initialize-BinaryProbe
+    [RollbackProbe.BinaryDiff]::WriteNsisReference((Resolve-Path -LiteralPath $CandidateBinary).Path, $candidateReference)
+    $candidateDigest = (Get-FileHash -LiteralPath $candidateReference -Algorithm SHA256).Hash.ToLowerInvariant()
 
     Run-Setup $oldSetup '/S' 'old fresh silent installation without /R'
     $oldBinaryDigest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+    Copy-Item -LiteralPath $exe -Destination $oldReference
     Assert-Installed $oldVersion $oldBinaryDigest 'old fresh install'
 
     # Exercise clean-exit rejection using a harmless process fixture, not a GUI
