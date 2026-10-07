@@ -104,6 +104,11 @@ impl StoreLease {
                     .strip_prefix(&self.root)
                     .map_err(|_| invalid("source package is outside private rollback storage"))?
                     .to_path_buf();
+                if relative_path != source_setup_relative_path(journal.point_id()) {
+                    return Err(invalid(
+                        "source package must belong to this single point's package directory",
+                    ));
+                }
                 let mut file = lock_regular_file(source.path)?;
                 let verified = source.selection.verify(&mut file, None).map_err(|error| {
                     invalid(&format!("source package failed verification: {error}"))
@@ -249,6 +254,7 @@ impl SnapshotManifest {
                 || cache.bytes == 0
                 || cache.release_url != FixedReleaseSetup::setup_url(&self.source_version)
                 || cache.signature.len() > 16 * 1024
+                || cache.relative_path != source_setup_relative_path(self.point_id)
             {
                 return Err(invalid("invalid cached source package binding"));
             }
@@ -271,6 +277,13 @@ impl SnapshotManifest {
             source: self.source,
         }
     }
+}
+
+fn source_setup_relative_path(point: Uuid) -> PathBuf {
+    PathBuf::from("points")
+        .join(point.to_string())
+        .join("package")
+        .join("source-setup.exe")
 }
 
 #[cfg(test)]
@@ -362,5 +375,102 @@ mod tests {
             .into();
         fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(lease.verify_snapshot(&point).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires the fixed signed production Setup downloaded by the GA contract"]
+    fn protocol_source_cache_is_verified_and_owned_by_exactly_its_previous_point() {
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        let setup_path = PathBuf::from(std::env::var_os("CC_SWITCH_GA_SIGNED_SETUP").unwrap());
+        let manifest_path =
+            PathBuf::from(std::env::var_os("CC_SWITCH_GA_SIGNED_MANIFEST").unwrap());
+        let runner_temp = PathBuf::from(std::env::var_os("RUNNER_TEMP").unwrap());
+        assert!(setup_path.starts_with(&runner_temp));
+        assert!(manifest_path.starts_with(&runner_temp));
+        let target = ForkVersion::parse("3.20.4-fork.3").unwrap();
+        let selection =
+            FixedReleaseSetup::from_manifest(&target, &fs::read(manifest_path).unwrap()).unwrap();
+        let temp = tempfile::tempdir_in(&runner_temp).unwrap();
+        let install = temp.path().join("installation");
+        fs::create_dir(&install).unwrap();
+        fs::write(install.join("cc-switch.exe"), b"MZ fixture").unwrap();
+        let source = temp.path().join("business.db");
+        let database = rusqlite::Connection::open(&source).unwrap();
+        database
+            .execute_batch("PRAGMA user_version=19; CREATE TABLE sentinel(value TEXT);")
+            .unwrap();
+        drop(database);
+        let mut lease = PrivateRoot::create_at(temp.path().join("private"))
+            .unwrap()
+            .try_lease()
+            .unwrap();
+        let mut catalog = Catalog::new(target.clone());
+        catalog
+            .begin_upgrade(
+                ForkVersion::parse("3.20.4-fork.4").unwrap(),
+                InstallSource::ProtocolInAppUpdate,
+            )
+            .unwrap();
+        catalog.advance(Phase::Prepared).unwrap();
+        catalog.advance(Phase::Quiescing).unwrap();
+        lease.save(&catalog).unwrap();
+        let point_id = catalog.journal().unwrap().point_id();
+        let database = lease
+            .capture_database(&source, CaptureSlot::Previous)
+            .unwrap();
+        let (resources, digest) = lease
+            .capture_resources(
+                &[ResourceRequest {
+                    path: temp.path().join("missing.json"),
+                    role: ResourceRole::Settings,
+                    kind: ResourceKind::File,
+                }],
+                CaptureSlot::Previous,
+            )
+            .unwrap();
+        assert!(lease
+            .seal_snapshot(&install, &database, &resources, &digest, None)
+            .is_err());
+        let misplaced = lease.root.join("unowned-setup.exe");
+        fs::copy(&setup_path, &misplaced).unwrap();
+        assert!(lease
+            .seal_snapshot(
+                &install,
+                &database,
+                &resources,
+                &digest,
+                Some(CachedSourceSetup {
+                    selection: &selection,
+                    path: &misplaced
+                })
+            )
+            .is_err());
+        let package = lease.root.join(source_setup_relative_path(point_id));
+        fs::create_dir_all(package.parent().unwrap()).unwrap();
+        fs::copy(&setup_path, &package).unwrap();
+        let point = lease
+            .seal_snapshot(
+                &install,
+                &database,
+                &resources,
+                &digest,
+                Some(CachedSourceSetup {
+                    selection: &selection,
+                    path: &package,
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            point.source_setup_digest,
+            Some(
+                Digest::parse("27329df67ca6d6b783c76444dad0d99f2c27701ccdac37afebab619a98295a8b")
+                    .unwrap()
+            )
+        );
+        let manifest = lease.verify_snapshot(&point).unwrap();
+        assert_eq!(
+            manifest.cached_source_setup.unwrap().relative_path,
+            source_setup_relative_path(point_id)
+        );
     }
 }
