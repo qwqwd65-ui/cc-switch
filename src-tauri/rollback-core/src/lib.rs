@@ -9,6 +9,10 @@ mod ticket;
 #[cfg(windows)]
 mod windows_database;
 #[cfg(windows)]
+mod windows_resources;
+#[cfg(windows)]
+mod windows_security;
+#[cfg(windows)]
 mod windows_store;
 
 pub use catalog::Catalog;
@@ -18,5 +22,11 @@ pub use package::{FixedReleaseSetup, PackageError, VerifiedSetup, UPDATER_PUBLIC
 pub use ticket::{PreparedSelection, TicketGate};
 #[cfg(windows)]
 pub use windows_database::{CaptureSlot, DatabaseImage};
+#[cfg(windows)]
+pub use windows_resources::{
+    ResourceInventory, ResourceKind, ResourceRequest, ResourceRole, ResourceState, SnapshotResource,
+};
+#[cfg(windows)]
+pub use windows_security::FileDacl;
 #[cfg(windows)]
 pub use windows_store::{PrivateRoot, StoreError, StoreLease};

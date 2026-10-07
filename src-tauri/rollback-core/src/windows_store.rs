@@ -184,6 +184,21 @@ pub(crate) fn wide_path(path: &Path) -> Vec<u16> {
 }
 
 pub(crate) fn validate_local_path(path: &Path) -> Result<(), StoreError> {
+    validate_path_syntax(path)?;
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+                return Err(invalid("rollback storage cannot traverse a reparse point"))
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_path_syntax(path: &Path) -> Result<(), StoreError> {
     let disk = matches!(path.components().next(), Some(Component::Prefix(prefix))
         if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)));
     if !path.is_absolute()
@@ -197,14 +212,23 @@ pub(crate) fn validate_local_path(path: &Path) -> Result<(), StoreError> {
             "rollback storage requires an absolute local disk path",
         ));
     }
-    for ancestor in path.ancestors() {
-        match fs::symlink_metadata(ancestor) {
-            Ok(metadata) if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
-                return Err(invalid("rollback storage cannot traverse a reparse point"))
+    for component in path.components() {
+        if let Component::Normal(part) = component {
+            let text = part
+                .to_str()
+                .ok_or_else(|| invalid("path has invalid Unicode"))?;
+            let stem = text.split('.').next().unwrap_or("").to_ascii_uppercase();
+            let device = matches!(
+                stem.as_str(),
+                "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$"
+            ) || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+                && stem.len() == 4
+                && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+            if text.contains(':') || text.ends_with('.') || text.ends_with(' ') || device {
+                return Err(invalid(
+                    "path uses a device, alternate stream or ambiguous filename",
+                ));
             }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
         }
     }
     Ok(())

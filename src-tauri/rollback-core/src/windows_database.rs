@@ -10,6 +10,7 @@ use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
+use crate::windows_security::FileDacl;
 use crate::windows_store::{invalid, lock_regular_file, validate_ntfs_path, wide_path};
 use crate::{Digest, Direction, Phase, StoreError, StoreLease};
 
@@ -31,6 +32,7 @@ pub struct DatabaseImage {
     pub page_count: u64,
     pub bytes: u64,
     pub sha256: Digest,
+    pub source_dacl: FileDacl,
 }
 
 impl StoreLease {
@@ -73,6 +75,7 @@ impl StoreLease {
             page_count: image.page_count,
             bytes: image.bytes,
             sha256: image.sha256,
+            source_dacl: image.source_dacl,
         };
         let metadata = serde_json::to_vec_pretty(&image)?;
         let mut file = OpenOptions::new()
@@ -92,6 +95,7 @@ impl StoreLease {
         if image.transaction_id.is_nil() || image.point_id.is_nil() {
             return Err(invalid("database image has no identity"));
         }
+        image.source_dacl.validate()?;
         let directory = self.database_directory(image.transaction_id, image.point_id, image.slot);
         validate_ntfs_path(&directory)?;
         let path = directory.join("cc-switch.db");
@@ -150,10 +154,12 @@ struct CapturedDatabase {
     page_count: u64,
     bytes: u64,
     sha256: Digest,
+    source_dacl: FileDacl,
 }
 
 fn capture_sqlite(source: &Path, destination: &Path) -> Result<CapturedDatabase, StoreError> {
-    let _source_guard = lock_regular_file(source)?;
+    let source_guard = lock_regular_file(source)?;
+    let source_dacl = FileDacl::capture(&source_guard)?;
     // A crashed writer can leave committed pages only in WAL. Do not copy just
     // the main DB, and do not use immutable=1 (which would ignore those pages).
     let mut wal_name = source.as_os_str().to_owned();
@@ -215,11 +221,17 @@ fn capture_sqlite(source: &Path, destination: &Path) -> Result<CapturedDatabase,
     file.sync_all()?;
     let bytes = file.metadata()?.len();
     let sha256 = hash_reader(&mut file)?;
+    if FileDacl::capture(&source_guard)? != source_dacl {
+        return Err(invalid(
+            "database source permissions changed during capture",
+        ));
+    }
     Ok(CapturedDatabase {
         user_version,
         page_count,
         bytes,
         sha256,
+        source_dacl,
     })
 }
 
