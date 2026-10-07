@@ -185,6 +185,16 @@ impl Catalog {
         Ok(())
     }
 
+    pub fn bind_rescue_resources(&mut self, digest: Digest) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let journal = self.transaction.as_mut().ok_or(ProtocolError::Phase)?;
+        if journal.phase != Phase::Quiescing || journal.rescue_resources_sha256.is_some() {
+            return Err(ProtocolError::Phase);
+        }
+        journal.rescue_resources_sha256 = Some(digest);
+        Ok(())
+    }
+
     /// Make the sealed candidate recoverable after helper/installer death.
     /// It stays a transaction candidate, never a second selectable point.
     pub fn bind_captured_candidate(&mut self, point: Point) -> Result<(), ProtocolError> {

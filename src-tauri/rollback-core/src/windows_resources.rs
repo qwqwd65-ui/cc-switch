@@ -100,11 +100,12 @@ impl StoreLease {
         requests: &[ResourceRequest],
         slot: CaptureSlot,
     ) -> Result<(ResourceInventory, Digest), StoreError> {
-        let catalog = self
+        let mut catalog = self
             .load()?
             .ok_or_else(|| invalid("resource capture has no catalog"))?;
         let journal = catalog
             .journal()
+            .cloned()
             .ok_or_else(|| invalid("resource capture has no transaction"))?;
         if journal.phase() != Phase::Quiescing
             || (slot == CaptureSlot::Previous && journal.direction() != Direction::Upgrade)
@@ -168,6 +169,10 @@ impl StoreLease {
             .open(directory.join("inventory.json"))?;
         output.write_all(&bytes)?;
         output.sync_all()?;
+        if slot == CaptureSlot::Rescue {
+            catalog.bind_rescue_resources(digest.clone())?;
+            self.save(&catalog)?;
+        }
         cleanup.completed = true;
         Ok((capture.inventory, digest))
     }
@@ -229,6 +234,33 @@ impl StoreLease {
                 .join("rescue")
                 .join("resources"),
         }
+    }
+
+    pub(crate) fn read_resource_inventory(
+        &self,
+        transaction: Uuid,
+        point: Uuid,
+        slot: CaptureSlot,
+        digest: &Digest,
+    ) -> Result<ResourceInventory, StoreError> {
+        let directory = self.resource_directory(transaction, point, slot);
+        let mut file = lock_regular_file(&directory.join("inventory.json"))?;
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut file)
+            .take(MAX_INVENTORY_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_INVENTORY_BYTES {
+            return Err(invalid("resource inventory exceeds its size limit"));
+        }
+        let inventory: ResourceInventory = serde_json::from_slice(&bytes)?;
+        if inventory.transaction_id != transaction
+            || inventory.point_id != point
+            || inventory.slot != slot
+        {
+            return Err(invalid("resource inventory belongs to another transaction"));
+        }
+        self.verify_resources(&inventory, digest)?;
+        Ok(inventory)
     }
 }
 

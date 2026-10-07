@@ -8,7 +8,7 @@
 - 原模板的维护页可能先卸载，再进入 PREINSTALL。当前模板对 NSIS 升级跳过维护页，安装 Section 在 PREINSTALL 前要求应用正常退出。
 - 原模板构建探针：`https://github.com/qwqwd65-ui/cc-switch/actions/runs/37485907318`，成功。
 - 修改后模板构建探针：`https://github.com/qwqwd65-ui/cc-switch/actions/runs/37490056943`，成功。这里只验证生成脚本和构建，不能据此宣称实际回退通过。
-- 实际安装探针：`scripts/probe-windows-installers.ps1`。用固定旧生产 Setup 和高于旧版的测试 Setup，验证 `/S`、`/P`、无 `/R`、无 `/UPDATE` 的手动升级、中文空格路径、HKCU 范围、完整版本、安装文件哈希、降级后重装当前程序，以及恢复期间 deny-execute ACL 是否保留。结果归档到 GA artifact。
+- 实际安装探针：`scripts/probe-windows-installers.ps1`。用固定旧生产 Setup 和高于旧版的测试 Setup，验证 `/S`、`/P`、无 `/R`、无 `/UPDATE` 的手动升级、中文空格路径、HKCU 范围、完整版本、安装文件哈希、降级后重装当前程序，以及恢复期间 deny-execute ACL 是否保留。运行 `37572915283` 已通过这些安装合约；没有启动业务 GUI，也没有据此验证产品的完整数据恢复。
 - 旧生产资产固定为 `v3.20.4-fork.3`，Setup SHA-256：`27329df67ca6d6b783c76444dad0d99f2c27701ccdac37afebab619a98295a8b`，来源为 GitHub Release asset digest。该探针固定输入哈希；产品 A/B 路径仍需独立 minisign 验证，不把这个哈希当成签名。
 
 ## 写入点、解析器和捕获策略
@@ -53,4 +53,10 @@
 
 采用独立 Rust executable 与无 Tauri 依赖的共享 rollback-core crate。helper 自己的 `main` 不调用 GUI library、不启动 Store、不加载/迁移业务 DB；通过只读 SQLite 连接和 Backup API 保持来源 schema。安装器在应用文件替换前将 helper 解出到安装目录外，捕获成功后才允许继续。
 
-候选启动阻挡方案是对原 main exe 添加当前 SID 的临时 deny ExecuteFile DACL。只有 GA 证明该 ACL 在历史 Setup 覆盖后保留、且实际 CreateProcess 被拒绝，才接入 helper。原 SDDL、恢复步骤和丢弃该 guard 的时机必须写 journal；helper 路径不能受此 ACL 影响。重启后需恢复执行器并解除 guard，不能只留下一个永久打不开的 exe。尚未验证此方案，不声明 P1 全部通过。
+候选启动阻挡方案是对原 main exe 添加当前 SID 的临时 deny ExecuteFile DACL。运行 `37572915283` 已证明该 ACL 在历史 Setup 覆盖后保留，且实际 CreateProcess 被拒绝。下一步才接入 helper；原 SDDL、恢复步骤和丢弃该 guard 的时机必须写 journal；helper 路径不能受此 ACL 影响。重启后需恢复执行器并解除 guard，不能只留下一个永久打不开的 exe。产品停机门禁和恢复协调器尚未接入。
+
+## 恢复执行器的当前范围
+
+`windows_resource_restore.rs` 实现精确普通文件恢复：应急库存摘要写入 journal；来源与应急库存逐路径、角色对应；先全量预检再写入；同目录 stage、原 DACL 在写入敏感字节前应用、逐文件进度持久化、原子替换及只读状态恢复。每次续接重新验证材料及已恢复文件，执行器不消费 previous，也不推进全局健康状态。
+
+失败补偿仅在 `Recovering` 执行。恢复原先缺失的文件后，补偿可以凭本次 forward ledger 撤销它；不会凭目录位置删除普通升级期间出现的文件。旧快照缺失、应急快照已有文件时，必须先补应用受管写入账本再授权删除。Skill tree、symlink、业务目录迁移、云同步暂停派生设置仍待对应执行器；当前文件执行器遇到这些库存会在写入任何 live 文件之前中止。它尚未接入 GUI/helper，因此不构成可发布的回退版本。

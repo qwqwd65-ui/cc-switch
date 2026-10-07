@@ -9,6 +9,8 @@ mod ticket;
 #[cfg(windows)]
 mod windows_database;
 #[cfg(windows)]
+mod windows_resource_restore;
+#[cfg(windows)]
 mod windows_resources;
 #[cfg(windows)]
 mod windows_restore;

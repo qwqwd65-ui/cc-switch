@@ -41,6 +41,8 @@ pub struct Journal {
     #[serde(default)]
     pub(crate) rescue_database_sha256: Option<Digest>,
     #[serde(default)]
+    pub(crate) rescue_resources_sha256: Option<Digest>,
+    #[serde(default)]
     pub(crate) captured_candidate: Option<Point>,
 }
 
@@ -62,6 +64,7 @@ impl Journal {
             source,
             phase: Phase::Preparing,
             rescue_database_sha256: None,
+            rescue_resources_sha256: None,
             captured_candidate: None,
         }
     }
@@ -80,6 +83,9 @@ impl Journal {
     }
     pub fn rescue_database_sha256(&self) -> Option<&Digest> {
         self.rescue_database_sha256.as_ref()
+    }
+    pub fn rescue_resources_sha256(&self) -> Option<&Digest> {
+        self.rescue_resources_sha256.as_ref()
     }
     pub fn captured_candidate(&self) -> Option<&Point> {
         self.captured_candidate.as_ref()
@@ -117,7 +123,7 @@ impl Journal {
                 ));
             }
         }
-        if self.rescue_database_sha256.is_some()
+        if (self.rescue_database_sha256.is_some() || self.rescue_resources_sha256.is_some())
             && matches!(self.phase, Phase::Preparing | Phase::Prepared)
         {
             return Err(ProtocolError::Invalid(
