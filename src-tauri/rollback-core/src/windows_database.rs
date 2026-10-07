@@ -28,6 +28,7 @@ pub struct DatabaseImage {
     pub transaction_id: Uuid,
     pub point_id: Uuid,
     pub slot: CaptureSlot,
+    pub source_path: PathBuf,
     pub user_version: i64,
     pub page_count: u64,
     pub bytes: u64,
@@ -71,6 +72,7 @@ impl StoreLease {
             transaction_id: journal.id(),
             point_id: journal.point_id(),
             slot,
+            source_path: source.to_path_buf(),
             user_version: image.user_version,
             page_count: image.page_count,
             bytes: image.bytes,
@@ -96,6 +98,7 @@ impl StoreLease {
             return Err(invalid("database image has no identity"));
         }
         image.source_dacl.validate()?;
+        validate_ntfs_path(&image.source_path)?;
         let directory = self.database_directory(image.transaction_id, image.point_id, image.slot);
         validate_ntfs_path(&directory)?;
         let path = directory.join("cc-switch.db");

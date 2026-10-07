@@ -13,6 +13,8 @@ mod windows_resources;
 #[cfg(windows)]
 mod windows_security;
 #[cfg(windows)]
+mod windows_snapshot;
+#[cfg(windows)]
 mod windows_store;
 
 pub use catalog::Catalog;
@@ -28,5 +30,7 @@ pub use windows_resources::{
 };
 #[cfg(windows)]
 pub use windows_security::FileDacl;
+#[cfg(windows)]
+pub use windows_snapshot::{CachedSourceSetup, SnapshotManifest};
 #[cfg(windows)]
 pub use windows_store::{PrivateRoot, StoreError, StoreLease};

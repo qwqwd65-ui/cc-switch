@@ -77,6 +77,11 @@ impl FileDacl {
             .unwrap_or(buffer.len());
         let units = &buffer[..length];
         let sddl = String::from_utf16(units).map_err(|_| invalid("invalid file DACL text"))?;
+        // SetSecurityInfo can add AI (auto-inherited) even to a protected DACL.
+        // AI/AR are propagation bookkeeping; retain P and every ACE/ACE flag.
+        // Comparing these canonical forms verifies actual ACL and inheritance
+        // protection without rejecting a harmless Windows control-bit update.
+        let sddl = canonical_dacl(&sddl);
         drop(allocation);
         let result = Self { sddl };
         result.validate()?;
@@ -166,6 +171,12 @@ impl FileDacl {
         }
         Ok(LocalAllocation(descriptor))
     }
+}
+
+fn canonical_dacl(sddl: &str) -> String {
+    let prefix_end = sddl.find('(').unwrap_or(sddl.len());
+    let (prefix, aces) = sddl.split_at(prefix_end);
+    format!("{}{}", prefix.replace("AI", "").replace("AR", ""), aces)
 }
 
 struct LocalAllocation(*mut std::ffi::c_void);

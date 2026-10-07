@@ -139,7 +139,25 @@ impl StoreLease {
         if bytes.len() as u64 > MAX_CATALOG_BYTES {
             return Err(invalid("catalog exceeds its size limit"));
         }
-        let temporary = self.root.join(format!("catalog-{}.tmp", Uuid::new_v4()));
+        self.write_private_file(&destination, &bytes)
+    }
+
+    pub(crate) fn write_private_file(
+        &self,
+        destination: &Path,
+        bytes: &[u8],
+    ) -> Result<(), StoreError> {
+        if destination.strip_prefix(&self.root).is_err() {
+            return Err(invalid(
+                "metadata destination escaped private rollback storage",
+            ));
+        }
+        let parent = destination
+            .parent()
+            .ok_or_else(|| invalid("metadata has no parent"))?;
+        validate_ntfs_path(parent)?;
+        validate_regular_file_if_present(destination)?;
+        let temporary = parent.join(format!("metadata-{}.tmp", Uuid::new_v4()));
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -147,7 +165,6 @@ impl StoreLease {
         // Only clean up a file that this writer actually created.
         let cleanup = TemporaryCatalog(temporary.clone());
         file.write_all(&bytes)?;
-        file.write_all(b"\n")?;
         file.sync_all()?;
         drop(file);
         let source = wide_path(&temporary);
@@ -311,7 +328,7 @@ pub(crate) fn validate_regular_file_if_present(path: &Path) -> Result<(), StoreE
     }
 }
 
-fn current_account_sid() -> Result<String, StoreError> {
+pub(crate) fn current_account_sid() -> Result<String, StoreError> {
     let mut token = ptr::null_mut();
     // SAFETY: a valid process pseudo-handle and writable handle output pointer.
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
