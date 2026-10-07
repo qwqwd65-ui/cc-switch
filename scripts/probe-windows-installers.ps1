@@ -52,7 +52,7 @@ function Assert-NoLaunch([string]$Stage) {
     }
 }
 
-function Run-Setup([string]$Setup, [string]$Mode, [string]$Stage) {
+function Run-Setup([string]$Setup, [string]$Mode, [string]$Stage, [bool]$ExpectRunningRejection = $false) {
     # NSIS /D must be the last argument and is deliberately NOT quoted.
     # ProcessStartInfo avoids shell interpretation of spaces, Unicode and &.
     $info = [Diagnostics.ProcessStartInfo]::new()
@@ -69,6 +69,10 @@ function Run-Setup([string]$Setup, [string]$Mode, [string]$Stage) {
     $process.Dispose()
     $report.Add([ordered]@{ stage = $Stage; mode = $Mode; exitCode = $exitCode })
     Save-Report
+    if ($ExpectRunningRejection) {
+        if ($exitCode -eq 0) { throw "$Stage unexpectedly succeeded while a process was running." }
+        return
+    }
     if ($exitCode -ne 0) { throw "$Stage installer exited with $exitCode." }
     Assert-NoLaunch $Stage
 }
@@ -101,6 +105,31 @@ try {
     $oldBinaryDigest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
     Assert-Installed $oldVersion $oldBinaryDigest 'old fresh install'
 
+    # Exercise clean-exit rejection using a harmless process fixture, not a GUI
+    # that could initialize a database or take over live client configuration.
+    $fixtureDir = Join-Path $testRoot 'process-fixture'
+    New-Item -ItemType Directory -Path $fixtureDir | Out-Null
+    $fixtureExe = Join-Path $fixtureDir 'cc-switch.exe'
+    Copy-Item -LiteralPath "$env:WINDIR\System32\ping.exe" -Destination $fixtureExe
+    $fixtureInfo = [Diagnostics.ProcessStartInfo]::new()
+    $fixtureInfo.FileName = $fixtureExe
+    $fixtureInfo.Arguments = '-t 127.0.0.1'
+    $fixtureInfo.UseShellExecute = $false
+    $fixtureInfo.CreateNoWindow = $true
+    $fixtureInfo.RedirectStandardOutput = $true
+    $fixture = [Diagnostics.Process]::Start($fixtureInfo)
+    try {
+        Start-Sleep -Seconds 2
+        Run-Setup $CandidateSetup '/S' 'running process rejects silent install without kill' $true
+        if ($fixture.HasExited) { throw 'Installer killed the running process fixture.' }
+        Assert-Installed $oldVersion $oldBinaryDigest 'running process rejection preserves installation'
+    } finally {
+        if (-not $fixture.HasExited) { $fixture.Kill($true); $fixture.WaitForExit() }
+        $fixture.Dispose()
+        Start-Sleep -Seconds 2
+        Get-Event -SourceIdentifier $eventName -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+    }
+
     # The ordinary uninstaller would remove this value. It must survive upgrade.
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     New-Item -Path $runKey -Force | Out-Null
@@ -110,7 +139,7 @@ try {
     Assert-Installed $CandidateVersion $candidateDigest 'candidate manual upgrade'
     $preinstall = Get-Content -LiteralPath (Join-Path $installDir 'rollback-probe-preinstall.txt') -Raw
     $preinstall | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'upgrade-preinstall.txt')
-    foreach ($expected in @("DisplayVersion=$oldVersion", 'MainExecutable=present', 'Uninstaller=present')) {
+    foreach ($expected in @("DisplayVersion=$oldVersion", "InstallLocation=`"$installDir`"", 'MainExecutable=present', 'Uninstaller=present')) {
         if (-not $preinstall.Contains($expected)) { throw "PREINSTALL did not observe intact old installation: $expected" }
     }
     if ((Get-ItemPropertyValue -Path $runKey -Name 'CC Switch') -ne $sentinel) {
@@ -165,6 +194,7 @@ try {
     Assert-Installed $oldVersion $oldBinaryDigest 'historical silent downgrade'
     $report.Add([ordered]@{ stage = 'installer contract'; result = 'passed'; dataRollbackTested = $false })
     Save-Report
+    Write-Output '::notice title=Windows installer contract::Production fork.3 and probe Setup completed silent/passive upgrade, downgrade and reinstall in the original Unicode path without launching the app. The deny-execute guard survived historical Setup and blocked CreateProcess. Data restoration is not yet tested.'
 } catch {
     $report.Add([ordered]@{ stage = 'failure'; message = $_.Exception.Message; stack = $_.ScriptStackTrace })
     Save-Report
