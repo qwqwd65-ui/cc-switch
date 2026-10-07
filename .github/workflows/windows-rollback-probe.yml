@@ -26,14 +26,17 @@ jobs:
           node-version: "20"
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo registry and build
-        uses: actions/cache@v5
+        id: cargo-cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: windows-rollback-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: windows-rollback-cargo-
+          key: windows-rollback-cargo-probe-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/tauri.rollback-probe.conf.json') }}-${{ github.sha }}
+          restore-keys: |
+            windows-rollback-cargo-probe-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/tauri.rollback-probe.conf.json') }}-
+            windows-rollback-cargo-
       - name: Setup pnpm
         shell: bash
         env:
@@ -60,6 +63,15 @@ jobs:
           pnpm tauri --version
           pnpm tauri build --bundles nsis --config src-tauri/tauri.rollback-probe.conf.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Save successful build before installer tests
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
       - name: Inspect generated installer
         shell: pwsh
         run: |
