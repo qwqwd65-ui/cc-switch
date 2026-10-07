@@ -1,6 +1,6 @@
-//! Exact regular-file executor. Tree/link restoration and deletion based on
-//! the application's write-ownership ledger are separate executors. Reject an
-//! unsupported plan in its entirety before writing any live resource.
+//! Exact regular-file executor with point-scoped write-ownership checks.
+//! Tree/link and inventory-union restoration require their own executors.
+//! Reject an unsupported plan before writing any live resource.
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::os::windows::fs::OpenOptionsExt;
@@ -1006,6 +1006,65 @@ mod tests {
         )
         .unwrap();
         assert!(lease.load().is_err());
+    }
+
+    #[test]
+    fn next_successful_upgrade_replaces_the_single_point_and_clears_old_write_receipts() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut lease, paths) = idle_writer(temp.path());
+        let id = lease
+            .begin_managed_file_write(&paths[2], ResourceRole::Provider, outcome(b"owned"))
+            .unwrap();
+        fs::write(&paths[2], b"owned").unwrap();
+        lease.complete_managed_file_write(id).unwrap();
+        let mut catalog = lease.load().unwrap().unwrap();
+        let old_id = catalog.previous().unwrap().id;
+        catalog
+            .begin_upgrade(
+                ForkVersion::parse("3.20.4-fork.5").unwrap(),
+                InstallSource::ManualSetup,
+            )
+            .unwrap();
+        catalog.advance(Phase::Prepared).unwrap();
+        catalog.advance(Phase::Quiescing).unwrap();
+        lease.save(&catalog).unwrap();
+        let database = lease
+            .capture_database(&temp.path().join("business.db"), CaptureSlot::Previous)
+            .unwrap();
+        let requests: Vec<_> = paths
+            .iter()
+            .map(|path| ResourceRequest {
+                path: path.clone(),
+                role: ResourceRole::Provider,
+                kind: ResourceKind::File,
+            })
+            .collect();
+        let (resources, digest) = lease
+            .capture_resources(&requests, CaptureSlot::Previous)
+            .unwrap();
+        let point = lease
+            .seal_snapshot(
+                &temp.path().join("安装 路径"),
+                &database,
+                &resources,
+                &digest,
+                None,
+            )
+            .unwrap();
+        let mut catalog = lease.load().unwrap().unwrap();
+        catalog.advance(Phase::Installing).unwrap();
+        catalog.advance(Phase::Verifying).unwrap();
+        catalog.commit_upgrade(point).unwrap();
+        assert_eq!(catalog.cleanup_pending(), Some(old_id));
+        assert_ne!(catalog.previous().unwrap().id, old_id);
+        assert_eq!(
+            catalog.previous().unwrap().source_version.as_string(),
+            "3.20.4-fork.4"
+        );
+        assert!(catalog.managed_file_writes.is_empty());
+        catalog.finish_cleanup(Some(old_id)).unwrap();
+        lease.save(&catalog).unwrap();
+        assert!(lease.complete_managed_file_write(id).is_err());
     }
 
     #[test]
