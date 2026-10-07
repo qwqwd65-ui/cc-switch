@@ -149,7 +149,19 @@ function Assert-Installed([string]$Version, [string]$Digest, [string]$Stage) {
     if ($entry.DisplayVersion -ne $Version) { throw "${Stage}: wrong installed version $($entry.DisplayVersion)." }
     if ($entry.InstallLocation.Trim('"') -ne $installDir) { throw "${Stage}: installer changed directories." }
     if ((Test-Path $machineKey)) { throw "${Stage}: installation changed user scope." }
-    if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Digest) {
+    $actualDigest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualDigest -ne $Digest) {
+        $mismatch = [ordered]@{
+            stage = $Stage; expectedSha256 = $Digest; actualSha256 = $actualDigest
+            installedVersion = $entry.DisplayVersion
+            peProductVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion
+            sourcePeProductVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path -LiteralPath $CandidateBinary).Path).ProductVersion
+            installedBytes = (Get-Item -LiteralPath $exe).Length
+            sourceBytes = (Get-Item -LiteralPath $CandidateBinary).Length
+        }
+        $report.Add($mismatch)
+        Save-Report
+        Write-ProbeAnnotation 'error' 'Installed executable mismatch' ($mismatch | ConvertTo-Json -Depth 4 -Compress)
         throw "${Stage}: installed executable does not match its package."
     }
     $report.Add([ordered]@{

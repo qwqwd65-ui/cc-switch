@@ -68,8 +68,14 @@ impl FileDacl {
         if count == 0 || count > 64 * 1024 {
             return Err(invalid("file DACL exceeds its size limit"));
         }
-        // SAFETY: Windows returned a count including the terminating NUL.
-        let units = unsafe { std::slice::from_raw_parts(text, count as usize - 1) };
+        // SAFETY: Windows returned the allocation's character count. Determine
+        // the text length from its NUL terminator inside that bounded buffer.
+        let buffer = unsafe { std::slice::from_raw_parts(text, count as usize) };
+        let length = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
+        let units = &buffer[..length];
         let sddl = String::from_utf16(units).map_err(|_| invalid("invalid file DACL text"))?;
         drop(allocation);
         let result = Self { sddl };
@@ -127,14 +133,22 @@ impl FileDacl {
     }
 
     fn descriptor(&self) -> Result<LocalAllocation, StoreError> {
-        if !self.sddl.starts_with("D:")
-            || self.sddl.len() > 64 * 1024
-            || self.sddl.contains('\0')
-            || ["O:", "G:", "S:"]
-                .iter()
-                .any(|prefix| self.sddl.contains(prefix))
+        if !self.sddl.starts_with("D:") {
+            return Err(invalid("snapshot DACL has no D: component"));
+        }
+        if self.sddl.len() > 64 * 1024 {
+            return Err(invalid("snapshot DACL text is too large"));
+        }
+        if self.sddl.contains('\0') {
+            return Err(invalid("snapshot DACL text contains an embedded NUL"));
+        }
+        if ["O:", "G:", "S:"]
+            .iter()
+            .any(|prefix| self.sddl.contains(prefix))
         {
-            return Err(invalid("invalid snapshot DACL"));
+            return Err(invalid(
+                "snapshot DACL includes an unexpected owner/group/audit component",
+            ));
         }
         let text: Vec<u16> = self.sddl.encode_utf16().chain(Some(0)).collect();
         let mut descriptor = ptr::null_mut();
