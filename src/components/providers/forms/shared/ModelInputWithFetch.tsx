@@ -4,7 +4,7 @@ import { HoverTip } from "@/components/ui/hover-tip";
 import { Input } from "@/components/ui/input";
 import { Download, Loader2 } from "lucide-react";
 import type { FetchedModel } from "@/lib/api/model-fetch";
-import { SearchableModelPicker } from "./SearchableModelPicker";
+import { ModelDropdown } from "./ModelDropdown";
 
 interface ModelInputWithFetchProps {
   id: string;
@@ -41,9 +41,9 @@ export function ModelInputWithFetch({
           autoComplete="off"
           className="flex-1"
         />
-        <SearchableModelPicker
+        <ModelDropdown
           models={fetchedModels}
-          value={value}
+          currentModel={value}
           onSelect={onChange}
         />
       </div>

@@ -181,6 +181,7 @@ interface OpenCodeFormFieldsProps {
   // Base URL
   baseUrl: string;
   onBaseUrlChange: (value: string) => void;
+  upstreamProxyUrl?: string;
 
   // Headers
   headers: Record<string, string>;
@@ -210,6 +211,7 @@ export function OpenCodeFormFields({
   partnerPromotionKey,
   baseUrl,
   onBaseUrlChange,
+  upstreamProxyUrl,
   headers,
   onHeadersChange,
   models,
@@ -227,10 +229,10 @@ export function OpenCodeFormFields({
     setFetchedModels((prev) => (prev.length === 0 ? prev : []));
     setIsFetchingModels(false);
     return () => {
-      // Ignore responses for a previous endpoint/key or an unmounted form.
+      // Ignore responses for a previous endpoint/key/proxy or an unmounted form.
       modelFetchGeneration.current += 1;
     };
-  }, [baseUrl, apiKey]);
+  }, [baseUrl, apiKey, upstreamProxyUrl]);
 
   const handleFetchModels = useCallback(() => {
     if (!baseUrl || !apiKey) {
@@ -243,7 +245,9 @@ export function OpenCodeFormFields({
     const generation = ++modelFetchGeneration.current;
     setFetchedModels([]);
     setIsFetchingModels(true);
-    fetchModelsForConfig(baseUrl, apiKey)
+    fetchModelsForConfig(baseUrl, apiKey, undefined, undefined, undefined, {
+      upstreamProxyUrl,
+    })
       .then((result) => {
         if (generation !== modelFetchGeneration.current) return;
         const models = [
@@ -268,7 +272,7 @@ export function OpenCodeFormFields({
           setIsFetchingModels(false);
         }
       });
-  }, [baseUrl, apiKey, t]);
+  }, [baseUrl, apiKey, upstreamProxyUrl, t]);
 
   // Track which models have expanded options panel
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());

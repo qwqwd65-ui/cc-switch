@@ -188,7 +188,7 @@ describe("OpenCodeFormFields", () => {
     expect(onSubmit).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["baseUrl", "apiKey"] as const)(
+  it.each(["baseUrl", "apiKey", "upstreamProxyUrl"] as const)(
     "clears fetched models and pending selections when %s changes",
     async (field) => {
       vi.mocked(fetchModelsForConfig).mockResolvedValue([
@@ -224,54 +224,85 @@ describe("OpenCodeFormFields", () => {
     },
   );
 
-  it("ignores a stale response while fetching models for a new endpoint", async () => {
-    let resolveOld!: (
-      models: Awaited<ReturnType<typeof fetchModelsForConfig>>,
-    ) => void;
-    let resolveNew!: (
-      models: Awaited<ReturnType<typeof fetchModelsForConfig>>,
-    ) => void;
-    vi.mocked(fetchModelsForConfig)
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveOld = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveNew = resolve;
-          }),
+  it.each(["baseUrl", "upstreamProxyUrl"] as const)(
+    "ignores a stale response after %s changes",
+    async (field) => {
+      let resolveOld!: (
+        models: Awaited<ReturnType<typeof fetchModelsForConfig>>,
+      ) => void;
+      let resolveNew!: (
+        models: Awaited<ReturnType<typeof fetchModelsForConfig>>,
+      ) => void;
+      vi.mocked(fetchModelsForConfig)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveOld = resolve;
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveNew = resolve;
+            }),
+        );
+      const { props, rerender } = renderOpenCodeForm({
+        upstreamProxyUrl: "http://127.0.0.1:7890",
+      });
+      const fetchButton = screen.getByRole("button", {
+        name: "providerForm.fetchModels",
+      });
+      fireEvent.click(fetchButton);
+      rerender(
+        <FormShell>
+          <OpenCodeFormFields
+            {...props}
+            {...{
+              [field]:
+                field === "baseUrl"
+                  ? "https://new.example.com/v1"
+                  : "http://127.0.0.1:7891",
+            }}
+          />
+        </FormShell>,
       );
-    const { props, rerender } = renderOpenCodeForm();
-    const fetchButton = screen.getByRole("button", {
-      name: "providerForm.fetchModels",
-    });
-    fireEvent.click(fetchButton);
-    rerender(
-      <FormShell>
-        <OpenCodeFormFields {...props} baseUrl="https://new.example.com/v1" />
-      </FormShell>,
+      fireEvent.click(fetchButton);
+
+      await act(async () => {
+        resolveOld([{ id: "old-model", ownedBy: null }]);
+      });
+      expect(
+        screen.queryByRole("checkbox", { name: "old-model" }),
+      ).not.toBeInTheDocument();
+      expect(fetchButton).toBeDisabled();
+
+      await act(async () => {
+        resolveNew([{ id: "new-model", ownedBy: null }]);
+      });
+      expect(
+        await screen.findByRole("checkbox", { name: "new-model" }),
+      ).toBeEnabled();
+      expect(fetchButton).toBeEnabled();
+      expect(props.onModelsChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it("sends the provider proxy when fetching models", async () => {
+    vi.mocked(fetchModelsForConfig).mockResolvedValueOnce([]);
+    renderOpenCodeForm({ upstreamProxyUrl: "http://127.0.0.1:7890" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "providerForm.fetchModels" }),
     );
-    fireEvent.click(fetchButton);
-
-    await act(async () => {
-      resolveOld([{ id: "old-model", ownedBy: null }]);
-    });
-    expect(
-      screen.queryByRole("checkbox", { name: "old-model" }),
-    ).not.toBeInTheDocument();
-    expect(fetchButton).toBeDisabled();
-
-    await act(async () => {
-      resolveNew([{ id: "new-model", ownedBy: null }]);
-    });
-    expect(
-      await screen.findByRole("checkbox", { name: "new-model" }),
-    ).toBeEnabled();
-    expect(fetchButton).toBeEnabled();
-    expect(props.onModelsChange).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(fetchModelsForConfig).toHaveBeenLastCalledWith(
+        "https://api.example.com/v1",
+        "sk-test",
+        undefined,
+        undefined,
+        undefined,
+        { upstreamProxyUrl: "http://127.0.0.1:7890" },
+      ),
+    );
   });
 
   it.each(["empty", "failure"])(

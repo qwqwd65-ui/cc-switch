@@ -636,12 +636,12 @@ export function PiProviderForm({
     setIsFetchingModels(false);
   }, []);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    invalidateFetchedModels();
+    return () => {
       modelFetchGenerationRef.current += 1;
-    },
-    [],
-  );
+    };
+  }, [invalidateFetchedModels, upstreamProxyUrl]);
 
   const updateSettingsConfig = useCallback(
     (update: (config: Record<string, unknown>) => void) => {

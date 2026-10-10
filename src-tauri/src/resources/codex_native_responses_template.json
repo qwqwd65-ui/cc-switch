@@ -3,39 +3,15 @@
   "display_name": "native-responses-template",
   "description": "native-responses-template",
   "base_instructions": "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals.",
-  "default_reasoning_level": "xhigh",
+  "default_reasoning_level": "high",
   "supported_reasoning_levels": [
     {
       "effort": "none",
       "description": "Disable Thinking"
     },
     {
-      "effort": "minimal",
-      "description": "Minimal reasoning"
-    },
-    {
-      "effort": "low",
-      "description": "Fast responses with lighter reasoning"
-    },
-    {
-      "effort": "medium",
-      "description": "Balances speed and reasoning depth for everyday tasks"
-    },
-    {
       "effort": "high",
-      "description": "Greater reasoning depth for complex problems"
-    },
-    {
-      "effort": "xhigh",
-      "description": "Extra high reasoning depth for complex problems"
-    },
-    {
-      "effort": "max",
-      "description": "Maximum reasoning depth for the hardest problems"
-    },
-    {
-      "effort": "ultra",
-      "description": "Ultra reasoning depth"
+      "description": "Enabled Thinking"
     }
   ],
   "shell_type": "shell_command",

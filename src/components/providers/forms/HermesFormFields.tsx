@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { FormLabel } from "@/components/ui/form";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,7 @@ import { fillHermesModel, metadataFilledAnything } from "./modelMetadataFill";
 interface HermesFormFieldsProps {
   baseUrl: string;
   onBaseUrlChange: (value: string) => void;
+  upstreamProxyUrl?: string;
   apiKey: string;
   onApiKeyChange: (value: string) => void;
   category?: ProviderCategory;
@@ -84,6 +85,7 @@ function validateBaseUrl(raw: string): BaseUrlErrorCode | null {
 export function HermesFormFields({
   baseUrl,
   onBaseUrlChange,
+  upstreamProxyUrl,
   apiKey,
   onApiKeyChange,
   category,
@@ -105,6 +107,15 @@ export function HermesFormFields({
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [baseUrlTouched, setBaseUrlTouched] = useState(false);
+  const modelFetchGeneration = useRef(0);
+
+  useEffect(() => {
+    setFetchedModels([]);
+    setIsFetchingModels(false);
+    return () => {
+      modelFetchGeneration.current += 1;
+    };
+  }, [baseUrl, apiKey, upstreamProxyUrl]);
 
   const baseUrlErrorCode = useMemo(() => validateBaseUrl(baseUrl), [baseUrl]);
   const showBaseUrlError = baseUrlTouched && baseUrlErrorCode !== null;
@@ -148,9 +159,14 @@ export function HermesFormFields({
       });
       return;
     }
+    const generation = ++modelFetchGeneration.current;
+    setFetchedModels([]);
     setIsFetchingModels(true);
-    fetchModelsForConfig(baseUrl, apiKey)
+    fetchModelsForConfig(baseUrl, apiKey, undefined, undefined, undefined, {
+      upstreamProxyUrl,
+    })
       .then((fetched) => {
+        if (generation !== modelFetchGeneration.current) return;
         setFetchedModels(fetched);
         if (fetched.length === 0) {
           toast.info(t("providerForm.fetchModelsEmpty"));
@@ -161,11 +177,16 @@ export function HermesFormFields({
         }
       })
       .catch((err) => {
+        if (generation !== modelFetchGeneration.current) return;
         console.warn("[ModelFetch] Failed:", err);
         showFetchModelsError(err, t);
       })
-      .finally(() => setIsFetchingModels(false));
-  }, [baseUrl, apiKey, t]);
+      .finally(() => {
+        if (generation === modelFetchGeneration.current) {
+          setIsFetchingModels(false);
+        }
+      });
+  }, [baseUrl, apiKey, upstreamProxyUrl, t]);
 
   const handleRemoveModel = (index: number) => {
     const removedKey = modelKeysRef.current[index];

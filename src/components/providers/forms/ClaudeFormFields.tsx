@@ -29,7 +29,7 @@ import {
   ApiKeySection,
   EndpointField,
   ModelInputWithFetch,
-  SearchableModelPicker,
+  ModelDropdown,
 } from "./shared";
 import { CopilotAuthSection } from "./CopilotAuthSection";
 import { CodexOAuthSection } from "./CodexOAuthSection";
@@ -559,9 +559,9 @@ export function ClaudeFormFields({
             autoComplete="off"
             className="flex-1"
           />
-          <SearchableModelPicker
+          <ModelDropdown
             models={searchableModels}
-            value={value}
+            currentModel={value}
             onSelect={(id) => onModelChange(field, id)}
           />
         </div>

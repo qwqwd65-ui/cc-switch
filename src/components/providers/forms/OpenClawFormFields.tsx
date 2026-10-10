@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { ImeSafeInput } from "@/components/ui/ime-safe-input";
@@ -33,6 +33,7 @@ interface OpenClawFormFieldsProps {
   // Base URL
   baseUrl: string;
   onBaseUrlChange: (value: string) => void;
+  upstreamProxyUrl?: string;
 
   // API Key
   apiKey: string;
@@ -59,6 +60,7 @@ interface OpenClawFormFieldsProps {
 export function OpenClawFormFields({
   baseUrl,
   onBaseUrlChange,
+  upstreamProxyUrl,
   apiKey,
   onApiKeyChange,
   category,
@@ -77,6 +79,15 @@ export function OpenClawFormFields({
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const modelFetchGeneration = useRef(0);
+
+  useEffect(() => {
+    setFetchedModels([]);
+    setIsFetchingModels(false);
+    return () => {
+      modelFetchGeneration.current += 1;
+    };
+  }, [baseUrl, apiKey, upstreamProxyUrl]);
 
   // Stable key tracking for models list
   const modelKeysRef = useRef<string[]>([]);
@@ -131,9 +142,14 @@ export function OpenClawFormFields({
       });
       return;
     }
+    const generation = ++modelFetchGeneration.current;
+    setFetchedModels([]);
     setIsFetchingModels(true);
-    fetchModelsForConfig(baseUrl, apiKey)
+    fetchModelsForConfig(baseUrl, apiKey, undefined, undefined, undefined, {
+      upstreamProxyUrl,
+    })
       .then((models) => {
+        if (generation !== modelFetchGeneration.current) return;
         setFetchedModels(models);
         if (models.length === 0) {
           toast.info(t("providerForm.fetchModelsEmpty"));
@@ -144,11 +160,16 @@ export function OpenClawFormFields({
         }
       })
       .catch((err) => {
+        if (generation !== modelFetchGeneration.current) return;
         console.warn("[ModelFetch] Failed:", err);
         showFetchModelsError(err, t);
       })
-      .finally(() => setIsFetchingModels(false));
-  }, [baseUrl, apiKey, t]);
+      .finally(() => {
+        if (generation === modelFetchGeneration.current) {
+          setIsFetchingModels(false);
+        }
+      });
+  }, [baseUrl, apiKey, upstreamProxyUrl, t]);
 
   // Remove a model entry
   const handleRemoveModel = (index: number) => {

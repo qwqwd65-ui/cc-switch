@@ -76,6 +76,7 @@ export function McodeProviderForm({
   submitLabel,
   showButtons = true,
   upstreamProxyField,
+  upstreamProxyUrl,
   onSubmittingChange,
   onSubmitReadyChange,
 }: ProviderFormProps) {
@@ -267,6 +268,7 @@ export function McodeProviderForm({
             }
           />
           <OpenCodeFormFields
+            upstreamProxyUrl={upstreamProxyUrl}
             apiFormats={API_FORMATS}
             presetModelSources={mcodePresetModelSources}
             npm={config.api ?? "anthropic-messages"}

@@ -1276,32 +1276,6 @@ fn codex_supported_reasoning_levels(levels: &[String]) -> Value {
     json!(entries)
 }
 
-/// Fork default for third-party NativeResponses / Anthropic mappings that
-/// never declared `reasoningLevels`. Official #6228 only overrode the
-/// template when a row opted in; omitted rows kept the conservative
-/// none/high ladder and Codex's picker collapsed. Custom gateways (muyuan
-/// etc.) need the full Codex effort set, defaulting to `xhigh`.
-const CODEX_FORK_DEFAULT_REASONING_LEVEL: &str = "xhigh";
-
-fn fork_default_reasoning_level_names() -> Vec<String> {
-    CODEX_REASONING_LEVEL_DESCRIPTIONS
-        .iter()
-        .map(|(effort, _)| (*effort).to_string())
-        .collect()
-}
-
-fn apply_fork_default_reasoning_levels(entry_obj: &mut serde_json::Map<String, Value>) {
-    let levels = fork_default_reasoning_level_names();
-    entry_obj.insert(
-        "supported_reasoning_levels".to_string(),
-        codex_supported_reasoning_levels(&levels),
-    );
-    entry_obj.insert(
-        "default_reasoning_level".to_string(),
-        json!(CODEX_FORK_DEFAULT_REASONING_LEVEL),
-    );
-}
-
 /// Apply a per-model reasoning-level override onto a catalog entry. Returns
 /// true when the override was applied (so callers can skip further work).
 /// `template_default` is the base entry's `default_reasoning_level` (from the
@@ -1431,19 +1405,13 @@ fn codex_catalog_model_entry(
         entry_obj.insert("supports_image_detail_original".to_string(), json!(false));
     }
 
-    // Per-model reasoning levels override the template. Applies to every
-    // profile. NativeResponses / Anthropic use the fork's full Codex ladder
-    // (default xhigh) when the row omits `reasoningLevels`; ProxyChat still
-    // inherits the models_cache template. Official vendor catalogs keep their
-    // own levels unless the row opts in.
+    // Per-model reasoning levels override the template's conservative
+    // none/high default (e.g. a LiteLLM gateway serving a model that accepts
+    // low/medium/high/xhigh/max). Applies to every profile.
     let template_default = template
         .get("default_reasoning_level")
         .and_then(|value| value.as_str());
-    if !apply_codex_reasoning_level_override(entry_obj, template_default, spec)
-        && profile != CodexCatalogToolProfile::ProxyChat
-    {
-        apply_fork_default_reasoning_levels(entry_obj);
-    }
+    apply_codex_reasoning_level_override(entry_obj, template_default, spec);
 
     entry
 }
@@ -1473,10 +1441,9 @@ struct CodexCatalogModelSpec {
     base_instructions: Option<String>,
     /// Per-row override for the generated catalog's `supported_reasoning_levels`
     /// (e.g. ["none", "low", "medium", "high", "xhigh", "max"]). When omitted
-    /// NativeResponses / Anthropic use the full Codex ladder (default xhigh);
-    /// ProxyChat and official vendor catalogs keep their own template. The
-    /// vendor-catalog path applies an explicit override on top of the official
-    /// entry.
+    /// the template's conservative default (none/high) is kept. Consulted for
+    /// every profile; the vendor-catalog path applies it on top of the
+    /// official entry.
     reasoning_levels: Option<Vec<String>>,
     /// Per-row override for the generated catalog's `default_reasoning_level`.
     /// Only meaningful together with `reasoning_levels`; when absent the
@@ -3843,9 +3810,9 @@ experimental_bearer_token = "stale-table-key"
 
     #[test]
     fn native_responses_catalog_honors_per_model_reasoning_levels() {
-        // The native template now ships the full ladder (default xhigh). A
-        // per-model reasoningLevels override must still replace
-        // supported_reasoning_levels and pick a sensible default.
+        // The native template only declares none/high. A per-model
+        // reasoningLevels override must replace supported_reasoning_levels and
+        // pick a sensible default_reasoning_level.
         let settings = json!({
             "modelCatalog": {
                 "models": [
@@ -3922,13 +3889,13 @@ experimental_bearer_token = "stale-table-key"
             Some("high")
         );
 
-        // Template default ("xhigh") is kept when it is still in the list.
+        // Template default ("high") is kept when it is still in the list.
         assert_eq!(efforts(2), vec!["none", "high", "xhigh"]);
         assert_eq!(
             models[2]
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
-            Some("xhigh")
+            Some("high")
         );
 
         // Unknown / empty efforts are dropped; the default still resolves to
@@ -3977,44 +3944,6 @@ experimental_bearer_token = "stale-table-key"
                 .get("default_reasoning_level")
                 .and_then(|v| v.as_str()),
             Some("high")
-        );
-    }
-
-    #[test]
-    fn native_responses_catalog_defaults_full_reasoning_ladder_when_omitted() {
-        // Custom openai_responses mappings used to inherit the template's
-        // none/high thinking switch. Unspecified rows must now get the full
-        // Codex ladder so switching a relay like muyuan does not collapse
-        // the picker.
-        let settings = json!({
-            "modelCatalog": {
-                "models": [{ "model": "custom-relay" }]
-            }
-        });
-
-        let catalog = codex_model_catalog_from_settings(
-            &settings,
-            "",
-            CodexCatalogToolProfile::NativeResponses,
-        )
-        .expect("catalog generation should not error")
-        .expect("non-empty modelCatalog must yield a catalog");
-
-        let efforts: Vec<&str> = catalog["models"][0]["supported_reasoning_levels"]
-            .as_array()
-            .expect("supported_reasoning_levels array")
-            .iter()
-            .filter_map(|level| level.get("effort").and_then(|v| v.as_str()))
-            .collect();
-        assert_eq!(
-            efforts,
-            vec!["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-        );
-        assert_eq!(
-            catalog["models"][0]
-                .get("default_reasoning_level")
-                .and_then(|v| v.as_str()),
-            Some("xhigh")
         );
     }
 
