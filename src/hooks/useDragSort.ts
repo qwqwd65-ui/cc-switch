@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   KeyboardSensor,
   PointerSensor,
@@ -8,7 +8,7 @@ import {
 } from "@dnd-kit/core";
 import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import type { Provider } from "@/types";
 import { providersApi, type AppId } from "@/lib/api";
@@ -17,6 +17,8 @@ import { isProxyAppId } from "@/config/appConfig";
 export function useDragSort(providers: Record<string, Provider>, appId: AppId) {
   const queryClient = useQueryClient();
   const { t, i18n } = useTranslation();
+  const sortingRef = useRef(false);
+  const [isSorting, setIsSorting] = useState(false);
 
   const sortedProviders = useMemo(() => {
     const locale =
@@ -51,25 +53,11 @@ export function useDragSort(providers: Record<string, Provider>, appId: AppId) {
     }),
   );
 
-  const handleDragEnd = useCallback(
-    async (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) {
-        return;
-      }
-
-      const oldIndex = sortedProviders.findIndex(
-        (provider) => provider.id === active.id,
-      );
-      const newIndex = sortedProviders.findIndex(
-        (provider) => provider.id === over.id,
-      );
-
-      if (oldIndex === -1 || newIndex === -1) {
-        return;
-      }
-
-      const reordered = arrayMove(sortedProviders, oldIndex, newIndex);
+  const saveOrder = useCallback(
+    async (reordered: Provider[]) => {
+      if (sortingRef.current) return;
+      sortingRef.current = true;
+      setIsSorting(true);
       const updates = reordered.map((provider, index) => ({
         id: provider.id,
         sortIndex: index,
@@ -109,14 +97,41 @@ export function useDragSort(providers: Record<string, Provider>, appId: AppId) {
             defaultValue: "排序更新失败",
           }),
         );
+      } finally {
+        sortingRef.current = false;
+        setIsSorting(false);
       }
     },
-    [sortedProviders, appId, queryClient, t],
+    [appId, queryClient, t],
+  );
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const from = sortedProviders.findIndex((p) => p.id === active.id);
+      const to = sortedProviders.findIndex((p) => p.id === over.id);
+      if (from < 0 || to < 0) return;
+      await saveOrder(arrayMove(sortedProviders, from, to));
+    },
+    [sortedProviders, saveOrder],
+  );
+
+  const moveToBoundary = useCallback(
+    async (id: string, boundary: "top" | "bottom") => {
+      const from = sortedProviders.findIndex((p) => p.id === id);
+      const to = boundary === "top" ? 0 : sortedProviders.length - 1;
+      if (from < 0 || from === to) return;
+      await saveOrder(arrayMove(sortedProviders, from, to));
+    },
+    [sortedProviders, saveOrder],
   );
 
   return {
     sortedProviders,
     sensors,
     handleDragEnd,
+    moveToBoundary,
+    isSorting,
   };
 }

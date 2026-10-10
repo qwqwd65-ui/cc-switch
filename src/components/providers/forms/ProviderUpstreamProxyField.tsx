@@ -33,7 +33,7 @@ export function ProviderUpstreamProxyField({
           <p className="text-xs text-muted-foreground">
             {t("providerForm.upstreamProxyHint", {
               defaultValue:
-                "启用后，该供应商所有上游网络访问都走此代理，不影响其他供应商或全局代理开关。",
+                "CC Switch 对该供应商发起的模型获取、额度查询和路由请求使用此代理；直连客户端由其自身网络设置控制。",
             })}
           </p>
         </div>

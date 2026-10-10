@@ -149,6 +149,27 @@ export async function checkForUpdate(
   { status: "up-to-date" } | { status: "available"; info: UpdateInfo }
 > {
   const currentVersion = await getCurrentVersion();
+  // 正式通道与后端安装流程共用 tauri.conf.json 的 fork 清单、公钥和版本判断。
+  // 安装由后端重新检查并执行，前端只持有展示信息。
+  if ((opts.channel ?? "stable") === "stable") {
+    const { check } = await import("@tauri-apps/plugin-updater");
+    const update = await check({ timeout: opts.timeout ?? 30000 });
+    if (!update) return { status: "up-to-date" };
+    try {
+      return {
+        status: "available",
+        info: {
+          currentVersion,
+          availableVersion: update.version,
+          notes: update.body,
+          pubDate: update.date,
+          releaseUrl: `${RELEASES_PAGE_URL}/tag/v${update.version}`,
+        },
+      };
+    } finally {
+      await update.close();
+    }
+  }
   const release = await fetchLatestRelease(
     opts.timeout ?? 30000,
     opts.channel ?? "stable",

@@ -1,0 +1,128 @@
+name: Upstream Sync Validation
+
+on:
+  push:
+    branches: ["sync/upstream-v4.0.7-20261010"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+          mkdir -p validation-logs
+      - name: TypeScript
+        id: types
+        continue-on-error: true
+        run: pnpm typecheck 2>&1 | tee validation-logs/types.log
+      - name: Formatting
+        id: format
+        continue-on-error: true
+        run: pnpm format:check 2>&1 | tee validation-logs/format.log
+      - name: Frontend regressions
+        id: tests
+        continue-on-error: true
+        run: pnpm test:unit --maxWorkers=2 --minWorkers=1 2>&1 | tee validation-logs/tests.log
+      - name: Renderer build
+        id: build
+        continue-on-error: true
+        run: pnpm build:renderer 2>&1 | tee validation-logs/build.log
+      - name: Report validation
+        if: always()
+        env:
+          CHECK_OUTCOMES: '{"types":"${{ steps.types.outcome }}","format":"${{ steps.format.outcome }}","tests":"${{ steps.tests.outcome }}","build":"${{ steps.build.outcome }}"}'
+        run: node scripts/ci/report-sync-validation.mjs
+      - name: Upload frontend logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-sync-frontend-logs
+          path: validation-logs/
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+          mkdir -p validation-logs dist
+      - name: Read Rust toolchain
+        id: toolchain
+        run: |
+          channel=$(sed -nE 's/^channel *= *"([^"]+)".*/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: src-tauri -> target
+          shared-key: backend
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0
+        with:
+          tool: cargo-nextest
+      - name: Rust formatting
+        id: format
+        continue-on-error: true
+        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml 2>&1 | tee validation-logs/format.log
+      - name: Rust compile and lint
+        id: rust
+        continue-on-error: true
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings 2>&1 | tee validation-logs/rust.log
+      - name: Backend regressions
+        id: tests
+        continue-on-error: true
+        run: cargo nextest run --locked --manifest-path src-tauri/Cargo.toml --profile ci 2>&1 | tee validation-logs/tests.log
+      - name: Build candidate Windows Setup
+        id: build
+        if: steps.rust.outcome == 'success' && steps.tests.outcome == 'success'
+        continue-on-error: true
+        run: |
+          node -e 'require("fs").writeFileSync("candidate-tauri-config.json", JSON.stringify({bundle:{createUpdaterArtifacts:false}}))'
+          pnpm tauri build --bundles nsis --config candidate-tauri-config.json 2>&1 | tee validation-logs/build.log
+      - name: Report validation
+        if: always()
+        env:
+          CHECK_OUTCOMES: '{"format":"${{ steps.format.outcome }}","rust":"${{ steps.rust.outcome }}","tests":"${{ steps.tests.outcome }}","build":"${{ steps.build.outcome }}"}'
+        run: node scripts/ci/report-sync-validation.mjs
+      - name: Upload Windows logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-sync-windows-logs
+          path: validation-logs/
+      - name: Upload candidate Setup
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cc-switch-4.0.7-fork.1-windows-candidate
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

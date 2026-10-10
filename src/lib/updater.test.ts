@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdate } from "./updater";
+const updaterMocks = vi.hoisted(() => ({ check: vi.fn(), close: vi.fn() }));
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: updaterMocks.check }));
 
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(),
@@ -22,39 +24,42 @@ describe("fork updater release discovery", () => {
     vi.clearAllMocks();
     vi.stubGlobal("fetch", fetchMock);
     mockedGetVersion.mockResolvedValue("3.20.4-fork.1");
+    updaterMocks.check.mockReset().mockResolvedValue(null);
+    updaterMocks.close.mockReset().mockResolvedValue(undefined);
   });
 
-  it("checks the fork repository and ignores prereleases on the stable channel", async () => {
-    fetchMock.mockResolvedValue(
-      githubResponse([
-        {
-          tag_name: "v3.21.0-fork.1-beta.1",
-          prerelease: true,
-          draft: false,
-          html_url:
-            "https://github.com/qwqwd65-ui/cc-switch/releases/tag/v3.21.0-fork.1-beta.1",
-        },
-        {
-          tag_name: "v3.20.5-fork.1",
-          prerelease: false,
-          draft: false,
-          html_url:
-            "https://github.com/qwqwd65-ui/cc-switch/releases/tag/v3.20.5-fork.1",
-        },
-      ]),
-    );
+  it("discovers the stable version through the same updater as the installer", async () => {
+    updaterMocks.check.mockResolvedValue({
+      version: "4.0.7-fork.1",
+      body: "Fork compatibility changes",
+      date: "2026-10-10T09:11:51Z",
+      close: updaterMocks.close,
+    });
 
     await expect(checkForUpdate()).resolves.toMatchObject({
       status: "available",
       info: {
         currentVersion: "3.20.4-fork.1",
-        availableVersion: "3.20.5-fork.1",
+        availableVersion: "4.0.7-fork.1",
+        notes: "Fork compatibility changes",
+        releaseUrl:
+          "https://github.com/qwqwd65-ui/cc-switch/releases/tag/v4.0.7-fork.1",
       },
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.github.com/repos/qwqwd65-ui/cc-switch/releases?per_page=10",
-      expect.objectContaining({ method: "GET" }),
-    );
+    expect(updaterMocks.check).toHaveBeenCalledWith({ timeout: 30000 });
+    expect(updaterMocks.close).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not advertise a release absent from the installer manifest", async () => {
+    await expect(checkForUpdate()).resolves.toEqual({ status: "up-to-date" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a manifest failure without switching update sources", async () => {
+    updaterMocks.check.mockRejectedValue(new Error("manifest unavailable"));
+    await expect(checkForUpdate()).rejects.toThrow("manifest unavailable");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("allows prereleases when the beta channel is requested", async () => {

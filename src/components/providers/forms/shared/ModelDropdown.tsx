@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -20,9 +20,11 @@ import type { FetchedModel } from "@/lib/api/model-fetch";
 export function ModelDropdown({
   models,
   onSelect,
+  currentModel,
 }: {
   models: FetchedModel[];
   onSelect: (id: string) => void;
+  currentModel?: string;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -81,12 +83,16 @@ export function ModelDropdown({
                     // Expose the vendor name as a keyword so models can also be
                     // fuzzy-matched by vendor, not just by model id.
                     keywords={[m.ownedBy || "Other"]}
+                    data-current-model={m.id === currentModel || undefined}
                     onSelect={() => {
                       onSelect(m.id);
                       setOpen(false);
                     }}
                   >
                     {m.id}
+                    {m.id === currentModel && (
+                      <Check aria-hidden className="ms-auto h-4 w-4 shrink-0" />
+                    )}
                   </CommandItem>
                 ))}
               </CommandGroup>
