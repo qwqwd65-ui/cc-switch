@@ -1997,17 +1997,14 @@ fn codex_vendor_catalog_model_entry(
 
 /// Fields Codex's external-catalog parser REQUIRES (no serde default): when
 /// one is missing Codex rejects the whole catalog file at startup ("missing
-/// field ..."). `base_instructions` is likewise required on older parsers
-/// (<=0.144.5 read it as a plain field; newer builds moved it into
-/// `model_messages`), so a `models_cache.json` written by a newer Codex must
-/// be backfilled too. When Codex requires a new field, add it here AND to the
-/// static templates.
+/// field ..."). `base_instructions` is the other known required field; the
+/// templates always carry it and `codex_catalog_model_entry` handles it.
+/// When Codex requires a new field, add it here AND to the static templates.
 const CODEX_CATALOG_PARSER_REQUIRED_FIELDS: &[&str] = &[
     "supports_reasoning_summaries",
     // codex 0.148.0 rejects the catalog without it (#6661); official rows from
     // `codex debug models --bundled` and vendor files can lack it.
     "supports_parallel_tool_calls",
-    "base_instructions",
 ];
 
 /// Rows that come from outside this repo (official rows from whichever `codex`
