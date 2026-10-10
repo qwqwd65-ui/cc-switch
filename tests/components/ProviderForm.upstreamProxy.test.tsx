@@ -16,7 +16,7 @@ vi.mock("@/components/providers/forms/McodeProviderForm", () => ({
         onClick={() =>
           void props.onSubmit({
             name: "test",
-            settingsConfig: {},
+            settingsConfig: "{}",
             meta: { ...props.initialData?.meta, customUserAgent: "kept" },
           })
         }

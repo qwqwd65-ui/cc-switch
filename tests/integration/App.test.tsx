@@ -200,7 +200,7 @@ describe("App integration with MSW", () => {
     const { default: App } = await import("@/App");
     renderApp(App);
     await screen.findByTestId("provider-list");
-    fireEvent.click(sidebarApp("nav.skills"));
+    fireEvent.click(sidebarApp("Skills"));
     expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
     expect(screen.getByTestId("unified-skills-panel")).toBeInTheDocument();
   });

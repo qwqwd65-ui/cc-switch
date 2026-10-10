@@ -225,9 +225,13 @@ describe("Codex model-fetch lifecycle", () => {
       if (kind === "copilot") {
         expect(copilotGetModelsForAccount).toHaveBeenCalledWith(
           "github-account",
+          undefined,
         );
       } else if (kind === "xai") {
-        expect(fetchXaiOauthModels).toHaveBeenCalledWith("xai-account");
+        expect(fetchXaiOauthModels).toHaveBeenCalledWith(
+          "xai-account",
+          undefined,
+        );
       } else {
         expect(fetchModelsForConfig).toHaveBeenCalledWith(
           props.codexBaseUrl,
@@ -235,6 +239,7 @@ describe("Codex model-fetch lifecycle", () => {
           false,
           undefined,
           "",
+          { upstreamProxyUrl: undefined },
         );
       }
 

@@ -10,12 +10,15 @@ permissions:
 
 concurrency:
   group: upstream-sync-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -86,6 +89,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           shared-key: backend
+          cache-on-failure: true
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0
         with:
           tool: cargo-nextest

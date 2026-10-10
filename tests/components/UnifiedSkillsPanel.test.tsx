@@ -235,7 +235,7 @@ describe("UnifiedSkillsPanel", () => {
       .spyOn(skillsApi, "openInstalledFolder")
       .mockResolvedValue(true);
     renderPanel();
-    await openMenu("skillsPage.rowMoreAria", "skills.openFolder");
+    await openMenu("skillsPage.rowMoreAria", "打开文件夹");
     expect(open).toHaveBeenCalledWith("owner/repo:alpha-skill");
     open.mockRestore();
   });

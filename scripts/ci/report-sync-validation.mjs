@@ -18,6 +18,27 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     `| Check | Result |\n| --- | --- |\n${summary}\n`,
   );
 }
+const testsLog = "validation-logs/tests.log";
+if (fs.existsSync(testsLog)) {
+  const totals = fs
+    .readFileSync(testsLog, "utf8")
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .split(/\r?\n/)
+    .filter((line) =>
+      /^\s*(Test Files\s|Tests\s+.*(?:passed|failed)|Summary\s+\[)/.test(line),
+    );
+  if (totals.length) {
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      fs.appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `\n\`\`\`text\n${totals.join("\n")}\n\`\`\`\n`,
+      );
+    }
+    console.log(
+      `::notice title=Regression totals::${escape(totals.join("\n"))}`,
+    );
+  }
+}
 for (const [name, outcome] of failed) {
   const file = `validation-logs/${name}.log`;
   const log = fs.existsSync(file)
